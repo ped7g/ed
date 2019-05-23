@@ -121,7 +121,11 @@ DisplayScreen:
                 call    Print
 
         ; Status bar
-                ld      bc,$1f00
+                ld      a,(videoMaxY)
+                dec     a
+                ld      b,a
+                ld      c,0             ; At(0, MaxY-1)
+                push    bc              ; keep it also for drawing rows of text
                 ld      de,$0150
                 ld      a,1
                 call    WriteSpace
@@ -139,7 +143,8 @@ DisplayScreen:
                 ld      de,$c000
                 add     hl,de           ; Convert to real address
                 pop     de
-                ld      b,30
+                pop     bc
+                dec     b               ; B = videoMaxY - 2
 .l1             call    DisplayRow
                 djnz    .l1
                 ret

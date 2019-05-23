@@ -5,6 +5,9 @@
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Video modes
 
+videoMaxX       db      80
+videoMaxY       db      42
+
 InitVideo:
                 xor     a
                 out     (254),a
@@ -30,23 +33,111 @@ InitVideo:
         ; Set up the tilemap
         ; Memory map:
         ;       $4000   80x32x2 tilemap (5120 bytes)
+            ;*; (80x43x2 = 6880 bytes)
         ;       $6000   128*32 tiles (4K)
         ;
                 nextreg $07,2                   ; Set speed to 14Mhz
                 nextreg $6b,%11000001           ; Tilemap control
+                    ;*; !enable!80col-noAttr-palNum-r-r-UlaOverTm!tmOverUla
                 nextreg $6e,$00                 ; Tilemap base offset
+                    ;*; $4000 is start .. $5400 end (80x32) ... $5AE0 end (80x43)
                 nextreg $6f,$20                 ; Tiles base offset
+                    ;*; $6000
                 nextreg $4c,8                   ; Transparency colour (bright black)
                 nextreg $68,%10000000           ; Disable ULA output
+                    ;*; !disableUla-blending-r-r-r-r-r-stencil
                 nextreg $1C,$80                 ; reset tilemap clip window index to 0
                 nextreg $1B,0                   ; reset clip window to 640x256
                 nextreg $1B,159
                 nextreg $1B,0
                 nextreg $1B,255
 
+        ;; Set up Copper code to display 80x42.6 8x6px tiles
+        ; set up Copper control to "stop" + index 0
+                nextreg $61, 0                  ; COPPER_CONTROL_LO
+                nextreg $62, 0                  ; COPPER_CONTROL_HI
+                ; set COPPER_DATA for write by OUT (c)
+                ld      bc,$243B                ; TBBLUE_REGISTER_SELECT
+                ld      a,$60                   ; COPPER_DATA
+                out     (c),a                   ; select copper data register
+                inc     b                       ; BC = TBBLUE_REGISTER_ACCESS = $253B
+                ld      hl,$8000 | (47<<9) | 3  ; first WAIT instruction (at [3, 47])
+                ld      de,$310C                ; first TM.Yoffset=12 instruction
+        ; copper is restarted at [0,0] where everything is pre-set already from end of frame = nothing to do
+videoMode80x42_CopperSetupL1
+                ; every 6 pixels bump Tilemap-Y-Offset by two to squish original tiles to 8x6 pixels
+                ; at copper horizontal compare 47 the beam is in H-blank -> wait for this
+                out     (c),h                   ; wait instruction
+                out     (c),l
+                ; check if Y-offset == 64 -> change base address
+                bit     6,e
+                jr      z,keepBaseAddress
+                bit     7,e
+                jr      nz,keepBaseAddress
+                ; set base address to connect text on $5400+ as lines 32+
+                ; this requires a bit tricky setup... (to not wrap around toward end of screen)
+                ; scroll -64 (8 rows "down"), $4A00 base address (original row 16)
+                ld      a,$6e
+                out     (c),a
+                ld      a,$0A                   ; +10 (16 lines below original base)
+                out     (c),a
+                ld      e,192                   ; Y-offset will now grow from -64 (8 rows)
+keepBaseAddress
+                out     (c),d                   ; set tilemap Y-offset instruction
+                out     (c),e
+                inc     e                       ; Y-offset += 2
+                inc     e
+                ld      a,l
+                add     a,6
+                ld      l,a
+                cp      231                     ; wait-for-line-226 (225) was written?
+                jr      nz,keepScanline
+                ; first fully invisible line was reached, reset everything for [0,0] tile
+                ; the wait + yoffset was already filled in -> just setup all
+                ; set base address back to $4000 for tilemap line 0
+                ld      a,$6e
+                out     (c),a
+                xor     a
+                out     (c),a
+                ;; FIXME calculate real top border scanlines (280..316 is just hardcoded experiment)
+                ld      l,$FF&(280-1)           ; WAIT for line 280-1
+                inc     h
+                ld      e,0                     ; Y-offset = 0
+keepScanline
+                cp      $FF&(316-1)             ; when WAIT == 316-1 => whole code is done
+                jr      nz,videoMode80x42_CopperSetupL1    ; add further code
+                ld      a,h
+                rra
+                jr      nc,videoMode80x42_CopperSetupL1    ; CF=0 = not 316-1
+                ; add HALT at the end of copper code
+                ld      a,$FF
+                out     (c),a
+                out     (c),a
+
+                ; start up the copper thing
+                nextreg $62, %11000000          ; COPPER_CONTROL_HI ; reset+start, reset on every frame [0,0]
 DoneVideo:
                 ret
 
+; somewhere in top border (around H-line 310..319 - 32) set Y-offset to 0
+; Start with ZX48 50Hz timing => 311 is last top-border line
+; Sprite.y  Copper.line48   Yofs    tilemapLine     tm.base
+;   0       280             0       0               $40
+;   6       286             2       1               $40
+;  12       292             4       2               $40
+;  18       298             6       3               $40
+;  24       304             8       4               $40
+;  30       310            10       5               $40
+;  36         4            12       6               $40
+;  42        10            14       7               $40
+; ...
+; 186       154            62      31               $40
+; 192       160      192= -64      32 (+16 from Y)  $4A
+; ...
+; 246       214      210= -46      41               $4A
+; 252       220      212= -44      42 (+16 from Y)  $4A     ; only 4px visible
+; 258       226           -42      43               $4A     ; fully outside view
+; 264       232           -40      44               $4A
 
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Palette control
@@ -194,9 +285,9 @@ WriteSpace:
                 call    CalcTileAddress     ; HL = start corner
                 swapnib
                 ld      c,a                 ; C = colour
-                ld      a,160
+                ld      a,80
                 sub     e
-                sub     e                   ; A = 160 - 2*width = deltaHL
+                add     a,a                 ; A = 160 - 2*width = deltaHL
 .row            ld      b,e                 ; reset width counter
 .col            ld      (hl),' '            ; Write space
                 inc     hl
@@ -212,7 +303,7 @@ ClearScreen:
         ; Clear screen (write spaces in colour 0 everywhere)
         ; Uses:
         ;       BC, HL, A
-                ld      bc,2560
+                ld      bc,80*43
                 ld      hl,$4000
 .l1             ld      (hl),' '
                 inc     hl
