@@ -61,12 +61,12 @@ InitVideo:
                 ld      a,$60                   ; COPPER_DATA
                 out     (c),a                   ; select copper data register
                 inc     b                       ; BC = TBBLUE_REGISTER_ACCESS = $253B
-                ld      hl,$8000 | (47<<9) | 3  ; first WAIT instruction (at [3, 47])
+                ld      hl,$8000 | (39<<9) | 3  ; first WAIT instruction (at [3, 39])
                 ld      de,$310C                ; first TM.Yoffset=12 instruction
         ; copper is restarted at [0,0] where everything is pre-set already from end of frame = nothing to do
 videoMode80x42_CopperSetupL1
                 ; every 6 pixels bump Tilemap-Y-Offset by two to squish original tiles to 8x6 pixels
-                ; at copper horizontal compare 47 the beam is in H-blank -> wait for this
+                ; copper horizontal compare 39 = the beam is in H-blank (HW does fetch tilemap data 8-16px ahead!)
                 out     (c),h                   ; wait instruction
                 out     (c),l
                 ; check if Y-offset == 64 -> change base address
