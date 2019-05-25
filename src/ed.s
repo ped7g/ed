@@ -116,6 +116,29 @@ Main:
 MainLoop:
                 halt
                 call    DisplayScreen
+
+;    DEFINE DEBUG_SHOW_FULL_TILESET
+    IFDEF DEBUG_SHOW_FULL_TILESET
+                ;;FIXME DEBUG
+                ld      bc,$2300
+                ld      de,$0624
+                xor     a
+                call    WriteSpace
+                ld      hl,$4000+($24*160)+4
+                xor     a
+.debugLoopRows:
+                ld      b,$20
+.debugLoop32:
+                ld      (hl),a
+                inc     hl
+                inc     hl
+                inc     a
+                djnz    .debugLoop32
+                add     hl,160-$40
+                jp      p,.debugLoopRows
+                jr $    ;;FIXME DEBUG
+    ENDIF
+
 .l1             ld      a,(cursorY)
                 ld      b,a
                 ld      a,(cursorX)
