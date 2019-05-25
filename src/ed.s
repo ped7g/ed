@@ -54,7 +54,8 @@ CMDBUFFER       equ     $bd
 
         org     $6000
 
-        incbin  "data/font.bin"
+        include "data/tilemap_font_8x6.i.s"
+;         incbin  "data/font.bin"
 
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Sample text
