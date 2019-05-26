@@ -117,7 +117,7 @@ MainLoop:
                 halt
                 call    DisplayScreen
 
-;    DEFINE DEBUG_SHOW_FULL_TILESET
+    DEFINE DEBUG_SHOW_FULL_TILESET
     IFDEF DEBUG_SHOW_FULL_TILESET
                 ;;FIXME DEBUG
                 ld      bc,$2300
@@ -125,6 +125,31 @@ MainLoop:
                 xor     a
                 call    WriteSpace
                 ld      hl,$4000+($24*160)+4
+                call    .debugFullTileSet
+                ld      hl,$4000+($24*160)+80
+                ld      a,$40
+                call    .debugLoopRows
+                ld      a,$40
+                call    .debugLoopRows
+                ld      hl,$4000+($24*160)+81
+                xor     a
+3:
+                ld      c,4
+2:
+                ld      b,8
+1:
+                ld      (hl),a
+                inc     hl
+                inc     hl
+                djnz    1B
+                add     a,$10
+                dec     c
+                jr      nz,2B
+                add     hl,160-$40
+                or      a
+                jr      nz,3B
+                jr      $
+.debugFullTileSet:
                 xor     a
 .debugLoopRows:
                 ld      b,$20
@@ -136,7 +161,7 @@ MainLoop:
                 djnz    .debugLoop32
                 add     hl,160-$40
                 jp      p,.debugLoopRows
-                jr $    ;;FIXME DEBUG
+                ret
     ENDIF
 
 .l1             ld      a,(cursorY)
@@ -183,7 +208,7 @@ ProcessKey:
 
                 call    FlushCommands   ; Interpret commands
 
-                jr      MainLoop
+                jp      MainLoop
 
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Command control

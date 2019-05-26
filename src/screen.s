@@ -12,22 +12,7 @@ InitVideo:
                 xor     a
                 out     (254),a
 
-        ; Initialise palette
-        ;
-        ;   0   Normal text
-        ;   1   Cursor
-        ;   2   Inverse text
-        ;
-                ld      bc,$0007        ; Paper/ink combination (white on black)
-                xor     a               ; For slot 0
-                call    SetColour
-                ld      bc,$0700        ; Paper/ink combination (back on white)
-                ld      a,1             ; For slot 1
-                call    SetColour
-                ld      bc,$0a0f        ; Paper/ink combination (bright white on bright red)
-                ld      a,2
-                call    SetColour
-
+                call    SetFullTilemapPalette
                 call    ClearScreen
 
         ; Set up the tilemap
@@ -43,7 +28,7 @@ InitVideo:
                     ;*; $4000 is start .. $5400 end (80x32) ... $5AE0 end (80x43)
                 nextreg $6f,$20                 ; Tiles base offset
                     ;*; $6000
-                nextreg $4c,8                   ; Transparency colour (bright black)
+                nextreg $4c,$0f                 ; Transparency colour (last item)
                 nextreg $68,%10000000           ; Disable ULA output
                     ;*; !disableUla-blending-r-r-r-r-r-stencil
                 nextreg $1C,$80                 ; reset tilemap clip window index to 0
@@ -141,43 +126,135 @@ DoneVideo:
 
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Palette control
+; palette slots:
+; 0 - white on black                1 - black on white (inverse 0)
+; 2 - bright white on black         3 - black on bright white (inverse 2)
+; 4 - light blue on black           5 - light green on black
+; 6 - light cyan on black           7 - light yellow on black
+; 8 - white on blue (+8 sel)        9 - bright white on red (cursor)
+; A - bright white on blue (+8 sel) B - ?
+; C - light blue on blue (+8 sel)   D - light green on blue (+8 sel)
+; E - light cyan on blue (+8 sel)   F - light yellow on blue (+8 sel)
 
-Palette:
-                db  %00000000
-                db  %00000010
-                db  %10000000
-                db  %10000010
-                db  %00010000
-                db  %00010010
-                db  %10010000
-                db  %10010010
-                db  %01101101
-                db  %00000011
-                db  %11100000
-                db  %11100011
-                db  %00011100
-                db  %00011111
-                db  %11111100
-                db  %11111111
+PalBaseData:
+                db  %000'000'00,0       ; black (paper)
+                db  %001'001'00,1       ; dark grey (25% ink)
+                db  %011'011'01,1       ; light grey (75% ink)
+                db  %101'101'10,1       ; white (full ink)
+                db  %001'001'11,0       ; blue
+                db  %110'001'00,1       ; red
+                db  %110'001'11,0       ; magenda
+                db  %000'101'01,0       ; dark green
+                db  %000'110'11,0       ; cyan
+                db  %111'110'00,1       ; yellow
+                db  %001'011'10,1       ; light blue
+                db  %101'011'00,1       ; brown
+                db  %101'110'00,1       ; light green
+                db  %011'111'11,1       ; light cyan
+                db  %111'111'01,1       ; light yellow
+                db  %111'000'11,1       ; transparent E3
+PalSlotData:
+        ; slot 1: black on white (inverse slot 0)
+                db  %101'101'10,1       ; white (paper)
+                db  %011'011'01,1       ; light grey (25% ink)
+                db  %001'001'00,1       ; dark grey (75% ink)
+                db  %000'000'00,0       ; black (full ink)
+        ; slot 2: bright white on black
+                db  %000'000'00,0       ; black (paper)
+                db  %010'010'01,0       ; dark grey (25% ink)
+                db  %101'101'10,1       ; light grey (75% ink)
+                db  %111'111'11,1       ; bright white (full ink)
+        ; slot 3: black on bright white (inverse slot 2)
+                db  %111'111'11,1       ; bright white (paper)
+                db  %101'101'10,1       ; light grey (25% ink)
+                db  %010'010'01,0       ; dark grey (75% ink)
+                db  %000'000'00,0       ; black (full ink)
+        ; slot 4: light blue on black
+                db  %000'000'00,0       ; black (paper)
+                db  %000'000'00,1       ; (25% ink)
+                db  %000'010'10,0       ; (75% ink)
+                db  %001'011'10,1       ; light blue (full ink)
+        ; slot 5: light green on black
+                db  %000'000'00,0       ; black (paper)
+                db  %001'010'00,0       ; (25% ink)
+                db  %100'101'00,0       ; (75% ink)
+                db  %101'110'00,1       ; light green (full ink)
+        ; slot 6: bright cyan on black
+                db  %000'000'00,0       ; black (paper)
+                db  %000'010'01,0       ; (25% ink)
+                db  %001'101'10,1       ; (75% ink)
+                db  %011'111'11,1       ; light cyan (full ink)
+        ; slot 7: bright yellow on black
+                db  %000'000'00,0       ; black (paper)
+                db  %010'010'00,0       ; (25% ink)
+                db  %101'101'00,1       ; (75% ink)
+                db  %111'111'01,1       ; light yellow (full ink)
+        ; slot 8: white on blue (+8 sel)
+                db  %000'010'01,1       ; blue (paper)
+                db  %001'011'01,1       ; dark grey (25% ink)
+                db  %011'011'01,1       ; light grey (75% ink)
+                db  %101'101'10,1       ; white (full ink)
+        ; slot 9: bright white on red (cursor)
+                db  %111'000'00,0       ; red (paper)
+                db  %111'010'01,0       ; (25% ink)
+                db  %111'101'10,1       ; (75% ink)
+                db  %111'111'11,1       ; white (full ink)
+        ; slot A: bright white on blue (+8 sel)
+                db  %000'010'01,1       ; blue (paper)
+                db  %010'010'01,1       ; dark grey (25% ink)
+                db  %101'111'11,1       ; light grey (75% ink)
+                db  %111'111'11,1       ; bright white (full ink)
+        ; slot B - "empty" (repeat bright white chars)
+                db  %000'000'00,0       ; black (paper)
+                db  %010'010'01,0       ; dark grey (25% ink)
+                db  %101'101'10,1       ; light grey (75% ink)
+                db  %111'111'11,1       ; bright white (full ink)
+        ; slot C: light blue on blue (+8 sel)
+                db  %000'010'01,1       ; blue (paper)
+                db  %000'010'01,1       ; (25% ink)
+                db  %000'010'10,1       ; (75% ink)
+                db  %001'011'10,1       ; light blue (full ink)
+        ; slot D: light green on blue (+8 sel)
+                db  %000'010'01,1       ; blue (paper)
+                db  %001'010'01,0       ; (25% ink)
+                db  %100'101'00,1       ; (75% ink)
+                db  %101'110'00,1       ; light green (full ink)
+        ; slot E: light cyan on blue (+8 sel)
+                db  %000'010'01,1       ; blue (paper)
+                db  %000'010'10,0       ; (25% ink)
+                db  %001'101'10,1       ; (75% ink)
+                db  %011'111'11,1       ; light cyan (full ink)
+        ; slot F: light yellow on blue (+8 sel)
+                db  %000'010'01,1       ; blue (paper)
+                db  %010'010'01,0       ; (25% ink)
+                db  %101'101'00,1       ; (75% ink)
+                db  %111'111'01,1       ; light yellow (full ink)
 
-SetColour:
-        ; Input:
-        ;       B = Paper
-        ;       C = Ink
-        ;       A = Slot (0-15)
-        ; Uses:
-        ;       HL, BC, A
-                nextreg $43,%00110000   ; Set tilemap palette
-                swapnib
-                nextreg $40,a
-                ld      a,b             ; set Paper colour
-                call    .SetColourToA
-                ld      a,c             ; set Ink colour
-.SetColourToA   ; recursive sub-routine
-                ld      hl,Palette
-                add     hl,a
-                ld      a,(hl)
-                nextreg $41,a
+SetFullTilemapPalette:
+                nextreg $43,%00110000   ; Set tilemap palette0
+                nextreg $40,0           ; reset index
+                ld      c,16            ; do 16x16 identical palettes first
+.SlotLoop:      ld      b,32
+                ld      hl,PalBaseData
+.ColourLoop:    ld      a,(hl)
+                inc     hl
+                nextreg $44,a
+                djnz    .ColourLoop
+                dec     c
+                jr      nz,.SlotLoop
+                ; patch each slot (1..F) with specialized letter colours
+                ld      hl,PalSlotData
+                ld      a,16
+.SlotPatchLoop: ld      b,8
+                ld      c,a             ; preserve index in C
+                nextreg $40,a           ; set index for slot
+.ColourLoop2:   ld      a,(hl)
+                inc     hl
+                nextreg $44,a
+                djnz    .ColourLoop2
+                ld      a,c
+                add     a,16
+                jr      nz,.SlotPatchLoop
                 ret
 
 ;;----------------------------------------------------------------------------------------------------------------------
