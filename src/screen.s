@@ -39,6 +39,8 @@ InitVideo:
 
         ;; Set up Copper code to display 80x42.6 8x6px tiles
         ; set up Copper control to "stop" + index 0
+                DEFINE W_OFSY 1                 ; 0 = real HW board, 1 = CSpect
+
                 nextreg $61, 0                  ; COPPER_CONTROL_LO
                 nextreg $62, 0                  ; COPPER_CONTROL_HI
                 ; set COPPER_DATA for write by OUT (c)
@@ -46,7 +48,7 @@ InitVideo:
                 ld      a,$60                   ; COPPER_DATA
                 out     (c),a                   ; select copper data register
                 inc     b                       ; BC = TBBLUE_REGISTER_ACCESS = $253B
-                ld      hl,$8000 | (39<<9) | 3  ; first WAIT instruction (at [3, 39])
+                ld      hl,$8000 | (39<<9) | 3+W_OFSY  ; first WAIT instruction (at [3, 39])
                 ld      de,$310C                ; first TM.Yoffset=12 instruction
         ; copper is restarted at [0,0] where everything is pre-set already from end of frame = nothing to do
 videoMode80x42_CopperSetupL1
@@ -75,7 +77,7 @@ keepBaseAddress
                 ld      a,l
                 add     a,6
                 ld      l,a
-                cp      231                     ; wait-for-line-226 (225) was written?
+                cp      231+W_OFSY              ; wait-for-line-226 (225) was written?
                 jr      nz,keepScanline
                 ; first fully invisible line was reached, reset everything for [0,0] tile
                 ; the wait + yoffset was already filled in -> just setup all
@@ -85,11 +87,11 @@ keepBaseAddress
                 xor     a
                 out     (c),a
                 ;; FIXME calculate real top border scanlines (280..316 is just hardcoded experiment)
-                ld      l,$FF&(280-1)           ; WAIT for line 280-1
+                ld      l,$FF&(279+W_OFSY)      ; WAIT for line 280-1
                 inc     h
                 ld      e,0                     ; Y-offset = 0
 keepScanline
-                cp      $FF&(316-1)             ; when WAIT == 316-1 => whole code is done
+                cp      $FF&(315+W_OFSY)        ; when WAIT == 316-1 => whole code is done
                 jr      nz,videoMode80x42_CopperSetupL1    ; add further code
                 ld      a,h
                 rra
