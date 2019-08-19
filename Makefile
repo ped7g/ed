@@ -1,5 +1,5 @@
 Z80ASM = sjasmplus
-Z80ASMFLAGS = --msg=all --lst=ed.lst --lstlab --nologo --dirbol
+Z80ASMFLAGS = --msg=war --lst=ed.lst --lstlab --nologo --dirbol --fullpath --syntax=abfw
 OUTPUT_OPT = -D__IGNORE=
 
 # Z80ASM = bin/snasm

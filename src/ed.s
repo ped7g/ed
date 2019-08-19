@@ -4,11 +4,12 @@
 
 IFDEF _SJASMPLUS
 
-        OPT --zxnext=cspect --syntax=fA --dirbol    ; syntax tuning
+        OPT --zxnext=cspect         ; enable also Z80N instructions
         DEFINE message DISPLAY /D,  ; DISPLAY is mostly compatible with snasm MESSAGE
         DEFINE PC +($)              ; for current address the operator "$" has to be used
-        MACRO mul : MUL D,E : ENDM  ; MUL needs explicit registers in sjasmplus
+        MACRO mul : @mul de : ENDM  ; MUL needs explicit registers in sjasmplus
         DEVICE ZXSPECTRUM48         ; setup virtual device for SAVESNA functionality
+        CSPECTMAP "ed.sna.map"
 
 ELSE
 
@@ -54,15 +55,15 @@ CMDBUFFER       equ     $bd
 
         org     $6000
 
-        include "data/tilemap_font_8x6.i.s"
-;         incbin  "data/font.bin"
+        include "../data/tilemap_font_8x6.i.s"
+;         incbin  "../data/font.bin"
 
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Sample text
 
         org     $c000
 
-        incbin  "data/test.txt"
+        incbin  "../data/test.txt"
         db      EOF
 
 textlen equ PC - $c000
@@ -71,7 +72,7 @@ textlen equ PC - $c000
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; This ORGs at $7fff
 
-        include "src/keyboard.s"
+        include "keyboard.s"
 
 ;;----------------------------------------------------------------------------------------------------------------------
 
@@ -100,11 +101,11 @@ Initialise:
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Modules
 
-        include "src/utils.s"
-        include "src/screen.s"
-        include "src/display.s"
-        include "src/cmdtable.s"
-        include "src/state.s"
+        include "utils.s"
+        include "screen.s"
+        include "display.s"
+        include "cmdtable.s"
+        include "state.s"
 
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Main
@@ -127,12 +128,16 @@ MainLoop:
                 ld      hl,$4000+($24*160)+4
                 call    .debugFullTileSet
                 ld      hl,$4000+($24*160)+80
+
+;                 call    .debugFullTileSet     ; use this instead of next code to see all chars in colour blocks
                 ld      a,$40
                 call    .debugLoopRows
                 ld      a,$40
                 call    .debugLoopRows
-                ld      hl,$4000+($24*160)+81
                 xor     a
+4:
+                ld      hl,$4000+($24*160)+81
+                ld      e,4
 3:
                 ld      c,4
 2:
@@ -146,9 +151,19 @@ MainLoop:
                 dec     c
                 jr      nz,2B
                 add     hl,160-$40
-                or      a
+                dec     e
                 jr      nz,3B
-                jr      $
+
+                jr      $       ; comment this out to see colour blocks advancing
+
+                ld      b,100
+1:
+                ei
+                halt
+                djnz    1B
+                add     a,$10   ; offset colour blocks
+                jr      4B
+
 .debugFullTileSet:
                 xor     a
 .debugLoopRows:

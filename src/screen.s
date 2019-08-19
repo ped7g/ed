@@ -2,6 +2,9 @@
 ;; Low-level screen printing routines
 ;;----------------------------------------------------------------------------------------------------------------------
 
+; work-around for CSpect inaccuracy in copper wait instruction emulation
+W_OFSY          EQU     1                       ; 0 = real HW board, 1 = CSpect
+
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Video modes
 
@@ -39,7 +42,6 @@ InitVideo:
 
         ;; Set up Copper code to display 80x42.6 8x6px tiles
         ; set up Copper control to "stop" + index 0
-                DEFINE W_OFSY 1                 ; 0 = real HW board, 1 = CSpect
 
                 nextreg $61, 0                  ; COPPER_CONTROL_LO
                 nextreg $62, 0                  ; COPPER_CONTROL_HI
