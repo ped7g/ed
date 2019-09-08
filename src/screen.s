@@ -136,7 +136,7 @@ DoneVideo:
 ; 4 - light blue on black           5 - light green on black
 ; 6 - light cyan on black           7 - light yellow on black
 ; 8 - white on blue (+8 sel)        9 - bright white on red (cursor)
-; A - bright white on blue (+8 sel) B - ?
+; A - bright white on blue (+8 sel) B - white on dark grey (non-inverse menu/status/etc)
 ; C - light blue on blue (+8 sel)   D - light green on blue (+8 sel)
 ; E - light cyan on blue (+8 sel)   F - light yellow on blue (+8 sel)
 
@@ -208,9 +208,9 @@ PalSlotData:
                 db  %010'010'01,1       ; dark grey (25% ink)
                 db  %101'111'11,1       ; light grey (75% ink)
                 db  %111'111'11,1       ; bright white (full ink)
-        ; slot B - "empty" (repeat bright white chars)
-                db  %000'000'00,0       ; black (paper)
-                db  %010'010'01,0       ; dark grey (25% ink)
+        ; slot B: white on dark grey (non-inverse menu/status/etc)
+                db  %010'010'01,0       ; dark grey (paper)
+                db  %011'011'01,1       ; dark grey (33% ink)
                 db  %101'101'10,1       ; light grey (75% ink)
                 db  %111'111'11,1       ; bright white (full ink)
         ; slot C: light blue on blue (+8 sel)

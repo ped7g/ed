@@ -154,7 +154,7 @@ MainLoop:
                 dec     e
                 jr      nz,3B
 
-                jr      $       ; comment this out to see colour blocks advancing
+;                jr      $       ; comment this out to see colour blocks advancing
 
                 ld      b,100
 1:
@@ -162,7 +162,19 @@ MainLoop:
                 halt
                 djnz    1B
                 add     a,$10   ; offset colour blocks
-                jr      4B
+                ld      hl,$4000+($24*160)+5
+                ld      e,4
+3:
+                ld      b,32
+2:
+                ld      (hl),a
+                inc     hl
+                inc     hl
+                djnz    2B
+                add     hl,160-$40
+                dec     e
+                jr      nz,3B
+                jr      1B
 
 .debugFullTileSet:
                 xor     a
