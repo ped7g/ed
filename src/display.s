@@ -125,11 +125,13 @@ DisplayScreen:
                 dec     a
                 ld      b,a
                 ld      c,0             ; At(0, MaxY-1)
+                push    bc              ; keep it also for drawing footnote
                 push    bc              ; keep it also for drawing rows of text
                 ld      de,$0150
                 ld      a,1
                 call    WriteSpace
-                ld      bc,$1f01
+                pop     bc
+                inc     c
                 ld      de,Footnote
                 ld      a,1
                 call    Print
@@ -226,12 +228,17 @@ DebugByte:
 
 
 DisplayDebugger:
-                ld      bc,$1f4b
+                push    bc
+                ld      bc,(videoMaxY-1)        ; B = videoMaxY
+                dec     b
+                ld      c,$4b                   ; BC = [maxY-1, 75]
 
                 ; First nibble
                 ld      a,(DebugValue+1)
                 call    DebugByte
                 ld      a,(DebugValue)
-                jp      DebugByte
+                call    DebugByte
+                pop     bc
+                ret
 
 
