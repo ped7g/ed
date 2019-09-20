@@ -160,7 +160,15 @@ MainLoop:
 1:
                 ei
                 halt
+
+                ;; DEBUG read nextreg $6c (default tilemode attribute)
+                ld      a,$6c
+                call    ReadNextReg
+                ld      (DebugValue),a
+                call    DisplayDebugger
+
                 djnz    1B
+
                 add     a,$10   ; offset colour blocks
                 ld      hl,$4000+($24*160)+5
                 ld      e,4
@@ -780,6 +788,24 @@ MoveEnd:
                 ld      e,c
                 call    Doc_MoveForward
                 jp      CursorVisible
+
+;;----------------------------------------------------------------------------------------------------------------------
+
+ReadNextReg:
+        ; reads nextreg in A into A
+        ; Input
+        ;       A = nextreg to read
+        ; Output:
+        ;       A = value in nextreg
+        ; Uses:
+        ;       A, [currently selected NextReg on I/O port $243B]
+                push    bc
+                ld      bc, $243B   ; TBBLUE_REGISTER_SELECT_P_243B
+                out     (c),a
+                inc     b       ; bc = TBBLUE_REGISTER_ACCESS_P_253B
+                in      a,(c)   ; read desired NextReg state
+                pop     bc
+                ret
 
 ;;----------------------------------------------------------------------------------------------------------------------
 ;;----------------------------------------------------------------------------------------------------------------------

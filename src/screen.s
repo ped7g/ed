@@ -2,8 +2,12 @@
 ;; Low-level screen printing routines
 ;;----------------------------------------------------------------------------------------------------------------------
 
+TOP_OFSY_ZX48_50HZ      EQU     279
+TOP_OFSY_ZX128_50HZ     EQU     278
+
 ; work-around for CSpect inaccuracy in copper wait instruction emulation
 W_OFSY          EQU     1                       ; 0 = real HW board, 1 = CSpect
+TOP_OFSY        EQU     TOP_OFSY_ZX48_50HZ      ; next scanline is beginning of top border
 
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Video modes
@@ -26,14 +30,14 @@ InitVideo:
         ;
                 nextreg $07,2                   ; Set speed to 14Mhz
                 nextreg $6b,%11000001           ; Tilemap control
-                    ;*; !enable!80col-noAttr-palNum-r-r-UlaOverTm!tmOverUla
-                nextreg $6e,$00                 ; Tilemap base offset
+                    ;*; +enable+80col-noAttr-palNum-r-r-UlaOverTm+tmOverUla
+                nextreg $6e,$40                 ; Tilemap base offset
                     ;*; $4000 is start .. $5400 end (80x32) ... $5AE0 end (80x43)
-                nextreg $6f,$20                 ; Tiles base offset
+                nextreg $6f,$60                 ; Tiles base offset
                     ;*; $6000
                 nextreg $4c,$0f                 ; Transparency colour (last item)
                 nextreg $68,%10000000           ; Disable ULA output
-                    ;*; !disableUla-blending-r-r-r-r-r-stencil
+                    ;*; +disableUla-blending-r-r-r-r-r-stencil
                 nextreg $1C,$08                 ; reset tilemap clip window index to 0
                 nextreg $1B,0                   ; reset clip window to 640x256
                 nextreg $1B,159
@@ -80,7 +84,7 @@ keepBaseAddress
                 ld      a,l
                 add     a,6
                 ld      l,a
-                cp      231+W_OFSY              ; wait-for-line-226 (225) was written?
+                cp      225+6+W_OFSY            ; wait-for-line-226 (hblank in 225) was written?
                 jr      nz,keepScanline
                 ; first fully invisible line was reached, reset everything for [0,0] tile
                 ; the wait + yoffset was already filled in -> just setup all
@@ -90,15 +94,43 @@ keepBaseAddress
                 xor     a
                 out     (c),a
                 ;; FIXME calculate real top border scanlines (280..316 is just hardcoded experiment)
-                ld      l,$FF&(279+W_OFSY)      ; WAIT for line 280-1
+                ld      l,$FF&(TOP_OFSY+W_OFSY)      ; WAIT for line top scanline
                 inc     h
                 ld      e,0                     ; Y-offset = 0
+                jr      videoMode80x42_CopperSetupL1        ; add further code
 keepScanline
-                cp      $FF&(315+W_OFSY)        ; when WAIT == 316-1 => whole code is done
-                jr      nz,videoMode80x42_CopperSetupL1    ; add further code
+                cp      $FF&(TOP_OFSY+6*6+W_OFSY)   ; when WAIT == 316-1 => whole code is done
+                jr      nz,videoMode80x42_CopperSetupL1     ; add further code
                 ld      a,h
                 rra
-                jr      nc,videoMode80x42_CopperSetupL1    ; CF=0 = not 316-1
+                jr      nc,videoMode80x42_CopperSetupL1     ; CF=0 = not 316-1
+
+                ;; DEBUG add extra $6C write (default tilemode attribute = not used in "ed")
+                ld      hl,$8000 | (39<<9) | TOP_OFSY+31+W_OFSY
+                out     (c),h
+                out     (c),l
+                ; DEBUG red 1px stripe (only HW board)
+;                 ld      de,$4000
+;                 out     (c),d
+;                 out     (c),e
+;                 ld      de,$41E0
+;                 out     (c),d
+;                 out     (c),e
+;                 inc     l
+;                 out     (c),h
+;                 out     (c),l
+;                 ld      de,$4000
+;                 out     (c),d
+;                 out     (c),e
+;                 ld      de,$4100
+;                 out     (c),d
+;                 out     (c),e
+
+                ld      a,$6c
+                out     (c),a
+                ld      a,$4E
+                out     (c),a
+
                 ; add HALT at the end of copper code
                 ld      a,$FF
                 out     (c),a

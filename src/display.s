@@ -4,7 +4,7 @@
 ;;----------------------------------------------------------------------------------------------------------------------
 
 Title       db      "Ed (V0.1)",0
-Footnote    db      "Ln 0001  Col 0001",0
+Footnote    db      "Ln 0001  Col 0001 \"debug text: gpq\"",0
 
 ;;----------------------------------------------------------------------------------------------------------------------
 
@@ -136,6 +136,16 @@ DisplayScreen:
                 ld      a,1
                 call    Print
 
+                ;;; DEBUG BEGIN
+                ; one more extra footnote beyond the screen to debug 80x42.6 mode
+                pop     bc
+                push    bc
+                inc     b
+                ld      de,Footnote
+                ld      a,9
+                call    Print
+                ;;; DEBUG END
+
         ; Write the rows
                 ld      bc,$0100
                 call    CalcTileAddress
@@ -215,13 +225,13 @@ DebugByte:
                 swapnib                         ; Swap nibbles - print lower one first
                 call    GetNibble
                 push    de                      ; Store next value
-                ld      d,0                     ; Colour 0
+                ld      d,14                    ; Colour 14
                 call    PrintChar               ; Print the upper nibble
                 pop     de                      ; Restore next value
                 ld      a,d
                 inc     c                       ; Increment X coord
                 call    GetNibble               ; Get ASCII for next nibble
-                ld      d,0                     ; Colour 0
+                ld      d,13                    ; Colour 13
                 call    PrintChar               ; Print the lower nibble
                 inc     c
                 ret
