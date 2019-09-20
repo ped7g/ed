@@ -34,11 +34,12 @@ InitVideo:
                 nextreg $4c,$0f                 ; Transparency colour (last item)
                 nextreg $68,%10000000           ; Disable ULA output
                     ;*; !disableUla-blending-r-r-r-r-r-stencil
-                nextreg $1C,$80                 ; reset tilemap clip window index to 0
+                nextreg $1C,$08                 ; reset tilemap clip window index to 0
                 nextreg $1B,0                   ; reset clip window to 640x256
                 nextreg $1B,159
                 nextreg $1B,0
                 nextreg $1B,255
+                nextreg $30,0                   ; reset TM.Xoffset=0
 
         ;; Set up Copper code to display 80x42.6 8x6px tiles
         ; set up Copper control to "stop" + index 0
