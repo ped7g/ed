@@ -3,6 +3,9 @@
 ;; Displays the editor user interface
 ;;----------------------------------------------------------------------------------------------------------------------
 
+videoMaxX       db      80
+videoMaxY       db      42
+
 Title       db      "Ed (V0.1)",0
 Footnote    db      "Ln 0001  Col 0001 \"debug text: gpq\"",0
 

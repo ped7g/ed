@@ -114,7 +114,53 @@ Initialise:
 Main:
                 call    ClearScreen
 
+;; TEST video.GetInvisibleScanlines_byMode
+;                 xor     a
+; .TestGetInvisibleScanlines:
+;                 push    af
+;                 call    video.GetInvisibleScanlines_byMode
+;                 break : nop : nop
+;                 pop     af
+;                 inc     a
+;                 cp      video.MODE_COUNT+1
+;                 jr      nz,.TestGetInvisibleScanlines
+
+; .detectModeLoop
+;                 call    video.DetectMode
+;                 ld      hl,ModeNamePtrs
+;                 add     hl,a
+;                 add     hl,a
+;                 ld      de,(hl)     ; fake ; de = mode name string
+;                 call    video.DetectCSpectEmulator
+;                 ld      a,b         ; show regular HW as white text on black paper
+;                 xor     1           ; a = 0 (HW Z80N) / 1 (CSpect = inverted colours)
+;                 ld      bc,$1022
+;                 call    Print
+;                 halt
+;                 jr      .detectModeLoop
+; ModeNamePtrs:
+;                 dw      .Hdmi50,.Zx48_50,.zx128_50,.pentagon
+;                 dw      .Hdmi60,.Zx48_60,.zx128_60,.invalid
+; .Hdmi50         dz      "HDMI 50Hz    "
+; .Zx48_50        dz      "ZX48 50Hz    "
+; .zx128_50       dz      "ZX128 50Hz   "
+; .pentagon       dz      "Pentagon 50Hz"
+; .Hdmi60         dz      "HDMI 60Hz    "
+; .Zx48_60        dz      "ZX48 60Hz    "
+; .zx128_60       dz      "ZX128 60Hz   "
+; .invalid        dz      "invalid Pen60"
+
 MainLoop:
+                call    video.CopperNeedsReinit
+                jr      z,.videoConfigIsOk
+                call    video.GetInvisibleScanlines_byMode
+        ;       D = invisible top lines
+        ;       E = invisible top lines
+        ;       B = fully visible 6px heigh rows
+        ;       A = remaining visible scanlines after last full row (0..5)
+        ;       IX = pointer to ModeCfg structure
+
+.videoConfigIsOk:
                 halt
                 call    DisplayScreen
 
@@ -155,19 +201,72 @@ MainLoop:
                 jr      nz,3B
 
 ;                jr      $       ; comment this out to see colour blocks advancing
-
-                ld      b,100
+4:
+                ld      b,140
 1:
                 ei
                 halt
+                push    bc
+
+                ; FIXME extra delay
+;                 push    bc
+;                 ld      b,0
+;                 .7 djnz    $
+;                 pop     bc
+
+;; FIXME test of new rewrite of copper code generator
+                ld      a,1
+                out     (254),a
+                ; make third map "scroll" (by changing skipped scanlines
+                ld      a,b
+                ld      (.map3.skipScanlines),a
+                srl     a
+                ld      (.map2.tilemapY),a
+                ; force re-init any way
+                ld      a,video.MODE_COUNT
+                ld      (video.CopperNeedsReinit.CurrentMode),a
+;                jr      100F
+                call    video.CopperNeedsReinit
+                jr      z,100F  ; no reinit needed
+                call    video.GetInvisibleScanlines_byMode
+                ld      de,.debugSDisMap
+                ld      a,2
+                out     (254),a
+                call    video.CopperReinit
+                xor     a
+                out     (254),a
+                jr      100F
+.debugSDisMap:
+;                 video.SDisplayMap { 42, 0, 2 }
+;                 db      0
+                video.SDisplayMap { 5, 0, 1 }
+.map2:          video.SDisplayMap { 12, 0, 2 }
+.map3:          video.SDisplayMap { 12, 0, 4 }
+                db      0
+100:
+                pop     bc
+                djnz    1B
 
                 ;; DEBUG read nextreg $6c (default tilemode attribute)
+                push    af
                 ld      a,$6c
                 call    ReadNextReg
                 ld      (DebugValue),a
                 call    DisplayDebugger
+                pop     af
 
-                djnz    1B
+                ;; DEBUG
+                push    af
+                xor     a
+301:            push    af
+                call    video.GetInvisibleScanlines_byMode
+                ld      (DebugValue),a
+                call    DisplayDebugger
+                pop     af
+                inc     a
+                cp      video.MODE_COUNT+1
+                jr      c,301B
+                pop     af
 
                 add     a,$10   ; offset colour blocks
                 ld      hl,$4000+($24*160)+5
@@ -181,8 +280,8 @@ MainLoop:
                 djnz    2B
                 add     hl,160-$40
                 dec     e
-                jr      nz,3B
-                jr      1B
+                jp      nz,3B
+                jp      4B
 
 .debugFullTileSet:
                 xor     a
