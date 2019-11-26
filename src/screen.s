@@ -1,23 +1,64 @@
-;;----------------------------------------------------------------------------------------------------------------------
-;; Low-level screen printing routines
-;;----------------------------------------------------------------------------------------------------------------------
+;;----------------------------------------------------------------------------------------
+;; Video-mode low level routines, initializing tilemode and copper, printing single char
+;;----------------------------------------------------------------------------------------
+;; # List of functions:
+;; InitVideo                    - set up tilemode 80x42 (except copper), 28MHz, ...
+;; DetectMode                   - returns video.MODE_* value (current display mode)
+;; CopperNeedsReinit            - ZF=0 when copper needs reinit (mode change detected)
+;; GetModeConfigData            - converts video.MODE_* value to address of mode data
+;; GetInvisibleScanlines_byMode - get current mode limits
+;; GetInvisibleScanlines_byIX   - get current mode limits
+;; CopperReinit                 - generate copper code (when map-config or mode changes)
+;; ClearScreen                  - sets whole virtual map ($4000..font) to ' ' in color 0
+;; SetFullTilemapPalette        - (internal) setup tilemode palette
+;; CalcTileAddress              - memory address of particular single character
+;; CalcLineAddress              - memory address of particular row (in virtual map)
+;; WriteSpace                   - fills "rectangle" in virtual map with ' ' in color 0
+;; Print                        - print C-string
+;; PrintChar                    - print single character
+;; AdvancePos                   - advance BC coordinates to next position in virtual map
+;;----------------------------------------------------------------------------------------
+
+    ; default values for configuration-defines
+    IFNDEF VIDEO_FONT_ADR
+        DEFINE VIDEO_FONT_ADR   $6000       ; must fit into $4000..$7FFF region
+        ; this also limits the tile-map region, which is always $4000 to VIDEO_FONT_ADR
+        ; make sure all tiles fit into the Bank5 region (i.e. $7000 max for 128 tiles)
+    ENDIF
+
+    MACRO negR16toR16 fromR16?, toR16?
+        ; 6B 24T, uses A
+        xor     a
+        sub     low fromR16?
+        ld      low toR16?,a    ; low = 0 - low
+        sbc     a,a
+        sub     high fromR16?
+        ld      high toR16?,a   ; high = 0 - high - borrow
+    ENDM
 
     MODULE video
 
-HORIZONTAL_COMPARE      EQU     39              ; after the right border is finished in all modes
+FONT_ADR            = VIDEO_FONT_ADR                ; convert DEFINE to regular symbol
 
-; hdmi 50 | hdmi 60 | zx48 50 | zx48 60 | zx128 50 | zx128 60 | pentagon
-; 272-311 | 245-261 | 263-311 | 239-261 | 263-310  | 239-260  | 255-319  ; top border (visible)
-; 40  279 | 17  229 | 49  279 | 23  229 | 48  278  | 22  228  | 64  287  ; top border lines, line at -33
-;  0      | 15      |  0      |  9      |  0       | 10       |  0       ; top tilemode invisible
-;      40 |      20 |      57 |      33 |      57  |      33  |      49  ; bottom scanlines VISIBLE
+VIRTUAL_ROWS        = (VIDEO_FONT_ADR - $4000)/160  ; 51 for font=$6000, 76 for $7000
 
-    STRUCT SDisplayCfg
-modeNumber          BYTE            ; to have it accessible even if input argument is just IX pointer
-startScanline       WORD            ; 33 scanlines ahead of pixel area (in HDMI 60Hz way into blank area)
-invisibleTop        BYTE        0   ; how many top lines are in invisible range
-invisibleBottom     BYTE        0   ; how many bottom lines are in invisible range
+    STRUCT SDisplayMap
+; Account for the current "fully visible 6px rows" from GetInvisibleScanlines, creating
+; layout which fits on screen (if the layout is higher, the generator should survive it,
+; but it isn't recommended situation, the layout should be valid for current video mode).
+; The invisible top scanlines are skipped by default, "skipScanlines" is in visible range
+; the xOffset must be valid 0..79 value only, otherwise illegal values will be sent to
+; NextReg $2F (will work on core 3.0 as expected, but may stop working in newer cores).
+rows                BYTE    0   ; number of rows (0 = end of list, 1..43)
+tilemapY            BYTE    0   ; map 0..101 (but some region is font data)
+    ; so 8kiB reserved for map ($4000..$5FFF) is then Y: 0..50 (font at $6000)
+    ; 12kiB reserved for map ($4000..$6FFF) is Y: 0..75 range (font at $7000)
+    ; the particular line address in map is: $4000 + tilemapY * 160
+skipScanlines       BYTE    0   ; number of scanlines to skip (with tilemode off)
+xOffset             BYTE    0   ; tile number to start line at (wraps around) 0..79 only!
     ENDS
+
+HORIZONTAL_COMPARE  EQU         39  ; after the right border is finished in all modes
 
 MODE_HDMI_50        EQU         0
 MODE_ZX48_50        EQU         1
@@ -28,26 +69,75 @@ MODE_ZX48_60        EQU         5
 MODE_ZX128_60       EQU         6
 MODE_COUNT          EQU         7   ; pentagon at 60Hz is invalid combination
 
+    STRUCT SDisplayCfg
+modeNumber          BYTE            ; to have it accessible even if input argument is just IX pointer
+startScanline       WORD            ; 33 scanlines ahead of pixel area (in HDMI 60Hz way into blank area)
+invisibleTop        BYTE        0   ; how many top lines are in invisible range
+invisibleBottom     BYTE        0   ; how many bottom lines are in invisible range
+    ENDS
+
+;; core 2.00 scanlines table (needs refresh for 60Hz modes and core 3.0, it's different)
+; hdmi 50 | hdmi 60 | zx48 50 | zx48 60 | zx128 50 | zx128 60 | pentagon
+; 272-311 | 245-261 | 263-311 | 239-261 | 263-310  | 239-260  | 255-319  ; top border (visible)
+;  0   40 | 15   17 |  0   49 |  9   23 |  0   48  | 10   22  |  0   64  ; top tilemode invisible/visible
+;  0   40 | 12   20 |  0   57 |  0   33 |  0   57  |  0   33  |  0   49  ; bottom scanlines invisible/visible
+;     279 |     229 |     279 |     229 |     278  |     228  |     287  ; line at -33 (ahead of first tilemode line)
+
 DisplayCfgTab:
-.hdmi_50            SDisplayCfg MODE_HDMI_50,       279
+.hdmi_50            SDisplayCfg MODE_HDMI_50,       279             ; => 42 rows +4px
 .zx48_50            SDisplayCfg MODE_ZX48_50,       279
 .zx128_50           SDisplayCfg MODE_ZX128_50,      278
 .pentagon           SDisplayCfg MODE_PENTAGON_50,   287
+; FIXME - refresh 60Hz mode configurations for core 3.0
 .hdmi_60            SDisplayCfg MODE_HDMI_60,       229, 15, 12     ; => 38 rows +1px
 .zx48_60            SDisplayCfg MODE_ZX48_60,       229,  9         ; => 41 rows +1px
 .zx128_60           SDisplayCfg MODE_ZX128_60,      228, 10         ; => 41 rows +0px
 ; pentagon 60Hz is not an option (values as ZX48)
 .invalid            SDisplayCfg MODE_COUNT,         229,  9
 
-    STRUCT SDisplayMap
-; make sure the total numer of rows of all sections doesn't leak too much offscreen
-; = respect invisible top/bottom scanlines (or reported fully visible 6px rows number)
-; (may break generated copper code to generate wait commands outside of display range)
-; make sure the invisible top scanlines are skipped by first item
-rows                BYTE        ; number of rows (0 = end of list, 1..43)
-tilemapY            BYTE        ; map 8kiB: 0..50 (font 8kiB) OR map 12kiB: 0..75 (font 4kiB)
-skipScanlines       BYTE        ; number of scanlines to skip with tilemode off
-    ENDS
+;;----------------------------------------------------------------------------------------
+;; Init all video related settings to default state for 80x42 tilemode (has to be called
+;; at least once before the app will enter main loop).
+;; In main loop the CopperReinit is enough to call, when the need does arise - reported
+;; by CopperNeedsReinit or by change in layout done by app itself.
+;;
+;; Settings:
+;;   black border, ULA disabled, 28MHz turbo selected, keys F8+F3+Multiface enabled
+;;   4bit tilemode 80x32 with attribute bytes, tiles base to VIDEO_FONT_ADR
+;;   resets tilemode clip window (to full 640x256), sets palette
+;;   clears tilemap (from $4000 to VIDEO_FONT_ADR)
+
+InitVideo:
+                xor     a
+                out     (254),a                 ; black border
+
+                call    SetFullTilemapPalette   ; setup tilemode palette
+                call    ClearScreen             ; reset the $4000..VIDEO_FONT_ADR region
+                ; enable F8, F3 and Multiface
+                ld      a,$06
+                call    ReadNextReg
+                or      %1010'1000
+                nextreg $06,a
+                ; set other NextRegs to default settings of 80x42 tilemode component
+                nextreg $07,3                   ; Set speed to 28Mhz
+                nextreg $6b,%11000001           ; Tilemap control
+                    ;*; +enable+80col-noAttr-palNum-textMode-r-512tile+forceTmOverUla
+                ; $6E (TILEMAP_BASE_ADR_NR_6E) is not set up, because copper code does it
+                ; The "tilemapY" value in config is like 0..101, into map starting @ $4000
+                ; But the tiles def (font) must also reside somewhere, use tilemapY around
+                nextreg $6f,high VIDEO_FONT_ADR ; Tiles base offset
+                nextreg $4c,$0f                 ; Transparency colour (last item)
+                nextreg $68,%10000000           ; Disable ULA output
+                    ;*; +disableUla-blending-r-r-r-r-r-stencil
+                nextreg $1C,$08                 ; reset tilemap clip window index to 0
+                nextreg $1B,0                   ; reset clip window to 640x256
+                nextreg $1B,159
+                nextreg $1B,0
+                nextreg $1B,255
+                ; make sure the need of copper init is signalled
+                ld      a,video.MODE_COUNT
+                ld      (video.CopperNeedsReinit.CurrentMode),a
+                ret
 
 ;;----------------------------------------------------------------------------------------
 ;; Detect current video mode:
@@ -118,7 +208,7 @@ GetModeConfigData:
                 push    de
                 ld      e,a
                 ld      d,SDisplayCfg
-                @mul    de
+                mul     de
                 add     ix,de
                 pop     de
                 ret
@@ -163,49 +253,17 @@ GetInvisibleScanlines_byIX:
                 ; can't reach this point ever
 
 ;;----------------------------------------------------------------------------------------
-;; Detect if the code is running inside CSpect emulator
-
-DetectCSpectEmulator:
-        ; Output:
-        ;       ZF=1 => CSpect, ZF=0 => HW board (also B=0 for CSpect, B=1 for HW)
-        ; Uses:
-        ;       BC
-
-                ld      b,-1
-                db      $DD, $01, $00, $00
-                ; CSpect will see: break, nop, nop
-                ; Z80/Z80N HW will see: <wrong prefix> ld bc,0
-
-                inc     b               ; ZF=1 for CSpect, ZF=0 for HW board
-                ret
-
-;;----------------------------------------------------------------------------------------
 ;; Re-programs the Copper for current video mode with new display-map configuration
-
-    MACRO negR16toR16 fromR16?, toR16?
-        ; 6B 24T, uses A
-        xor     a
-        sub     low fromR16?
-        ld      low toR16?,a    ; low = 0 - low
-        sbc     a,a
-        sub     high fromR16?
-        ld      high toR16?,a   ; high = 0 - high - borrow
-    ENDM
-
-    MACRO negR16 r16?
-        ; 6B 24T, uses A
-        negR16toR16 r16?, r16?
-    ENDM
 
 CopperReinit:
         ; Input:
         ;       DE = pointer to SDisplayMap array (terminating item has `rows == 0`)
         ;       IX = pointer to SDisplayCfg structure
         ; Output:
-        ;       A = ?
+        ;       Copper is reprogrammed and started (in %01 mode, wrap-around infinite run)
         ; Uses:
-        ;       ... TBD ... (everything?)
-        ;       side effect: selects NextReg $11 or $03 on I/O port
+        ;       AF, BC, DE, HL, IX
+        ;       side effect: selects NextReg $60 on I/O port
                 ; remember which mode will be inited now
                 ld      a,(ix + SDisplayCfg.modeNumber)
                 ld      (CopperNeedsReinit.CurrentMode),a
@@ -238,16 +296,12 @@ CopperReinit:
                 ; start copper before the full code is generated to maximize chance
                 ; to catch "this" frame, if the generator was called early after interrupt
                 nextreg $62,%01'000'000 ; COPPER_CONTROL_HI_NR_62 ; restart copper from 0
-                ld      a,4             ;FIXME DEBUG
-                out     (254),a         ;FIXME DEBUG
                 call    .DisplayMapLoopEntry
                 ; add tilemap OFF after last display map (WAIT is already inserted)
                 ld      e,$6B           ; TILEMAP_CONTROL_NR_6B
                 out     (c),e
                 out     (c),0           ; switch OFF tilemap
                 ; fill up remaining copper code with NOOPs - calculate amount of NOOPs
-                ld      a,5             ;FIXME DEBUG
-                out     (254),a         ;FIXME DEBUG
                 ld      a,$62           ; COPPER_CONTROL_HI_NR_62
                 call    ReadNextReg     ; read it for calculating count + starting copper
                 ld      d,a
@@ -298,18 +352,27 @@ CopperReinit:
                 ld      de,$6B00 + %11000001    ; TILEMAP_CONTROL_NR_6B = %11000001 (ON)
                 out     (c),d
                 out     (c),e
-
-                ;; read config ++ (= tilemapY, rows)
+                ;; read config: xOffset -> setup X offset
+                ld      e,(ix + SDisplayMap.xOffset)
+                ld      d,8
+                mul     de              ; DE = x offset 0..639 (from valid 0..79 input)
+                ld      a,$2F
+                out     (c),a           ; TILEMAP_XOFFSET_MSB_NR_2F = high xOffset*8
+                out     (c),d
+                inc     a
+                out     (c),a           ; TILEMAP_XOFFSET_LSB_NR_30 = low xOffset*8
+                out     (c),e
+                ;; read config: tilemapY, rows
                 ld      a,(ix + SDisplayMap.rows)
                 ld      e,(ix + SDisplayMap.tilemapY)
                 ld      d,8
-                @mul    de              ; DE = tilemapY*8
+                mul     de              ; DE = tilemapY*8
                 ;; IX = SDisplayMap, HL = W-line, BC = $253B I/O port, DE = tilemapY*8, A = rows
 .Row6pxLoop:
                 ; set up base address of tilemap = (tilemapY/32 * (high 32*160))
                 push    de              ; D = tilemapY/32 (because DE = tilemapY*8)
                 ld      e,high (32*160)
-                @mul    de              ; DE = base address of tile map
+                mul     de              ; DE = base address of tile map
                 ld      d,$6E           ; TILEMAP_BASE_ADR_NR_6E
                 out     (c),d
                 out     (c),e
@@ -370,73 +433,24 @@ CopperReinit:
                 pop     de
                 ret
 
-    ENDMODULE
+;;----------------------------------------------------------------------------------------
+;; Clear screen (write spaces in colour 0 everywhere in $4000..VIDEO_FONT_ADR region)
 
-;;----------------------------------------------------------------------------------------------------------------------
-
-
-;;----------------------------------------------------------------------------------------------------------------------
-;; Video modes
-
-InitVideo:
-                xor     a
-                out     (254),a
-
-                call    SetFullTilemapPalette
-                call    ClearScreen
-
-        ; Set up the tilemap
-        ; Memory map:
-        ;       $4000   80x32x2 tilemap (5120 bytes)
-            ;*; (80x43x2 = 6880 bytes)
-        ;       $6000   128*32 tiles (4K)
-        ;
-                ld      a,$06
-                call    ReadNextReg
-                or      %1010'1000              ; enable F8, F3 and Multiface
-                nextreg $06,a
-                nextreg $07,3                   ; Set speed to 28Mhz
-                nextreg $6b,%11000001           ; Tilemap control
-                    ;*; +enable+80col-noAttr-palNum-textMode-r-512tile+forceTmOverUla
-                nextreg $6e,$40                 ; Tilemap base offset
-                    ;*; $4000 is start .. $5400 end (80x32) ... $5AE0 end (80x43)
-                nextreg $6f,$60                 ; Tiles base offset
-                    ;*; $6000
-                nextreg $4c,$0f                 ; Transparency colour (last item)
-                nextreg $68,%10000000           ; Disable ULA output
-                    ;*; +disableUla-blending-r-r-r-r-r-stencil
-                nextreg $1C,$08                 ; reset tilemap clip window index to 0
-                nextreg $1B,0                   ; reset clip window to 640x256
-                nextreg $1B,159
-                nextreg $1B,0
-                nextreg $1B,255
-                nextreg $30,0                   ; reset TM.Xoffset=0
-                ; make sure the need of copper init is signalled
-                ld      a,video.MODE_COUNT
-                ld      (video.CopperNeedsReinit.CurrentMode),a
+ClearScreen:
+        ; Uses:
+        ;       BC, HL, A
+                push    de
+                ld      bc,VIDEO_FONT_ADR-$4002
+                ld      hl,$4001
+                ld      de,hl               ; fake de = hl
+                inc     de                  ; de = $4002
+                ldd     (hl),0              ; fake [hl--] = 0
+                ld      (hl),' '
+                ldir
+                pop     de
                 ret
 
-; somewhere in top border (around H-line 310..319 - 32) set Y-offset to 0
-; Start with ZX48 50Hz timing => 311 is last top-border line
-; Sprite.y  Copper.line48   Yofs    tilemapLine     tm.base
-;   0       280             0       0               $40
-;   6       286             2       1               $40
-;  12       292             4       2               $40
-;  18       298             6       3               $40
-;  24       304             8       4               $40
-;  30       310            10       5               $40
-;  36         4            12       6               $40
-;  42        10            14       7               $40
-; ...
-; 186       154            62      31               $40
-; 192       160      192= -64      32 (+16 from Y)  $4A
-; ...
-; 246       214      210= -46      41               $4A
-; 252       220      212= -44      42 (+16 from Y)  $4A     ; only 4px visible
-; 258       226           -42      43               $4A     ; fully outside view
-; 264       232           -40      44               $4A
-
-;;----------------------------------------------------------------------------------------------------------------------
+;;----------------------------------------------------------------------------------------
 ;; Palette control
 ; palette slots:
 ; 0 - white on black                1 - black on white (inverse 0)
@@ -542,7 +556,12 @@ PalSlotData:
                 db  %101'101'00,1       ; (75% ink)
                 db  %111'111'01,1       ; light yellow (full ink)
 
+;;----------------------------------------------------------------------------------------
+;; Setup palette of tilemode
+
 SetFullTilemapPalette:
+        ; Uses:
+        ;       A, BC, HL, NextRegs [$40, $44]
                 nextreg $43,%00110000   ; Set tilemap palette0
                 nextreg $40,0           ; reset index
                 ld      c,16            ; do 16x16 identical palettes first
@@ -569,108 +588,56 @@ SetFullTilemapPalette:
                 jr      nz,.SlotPatchLoop
                 ret
 
-;;----------------------------------------------------------------------------------------------------------------------
-;; Utitlies
+;;----------------------------------------------------------------------------------------
+;; Calculate address of coordinate [x=C 0..79,y=B 0..101] into the tilemap = HL
 
 CalcTileAddress:
         ; Input:
-        ;       B = Y coord (0-31)
+        ;       B = Y coord (0-101)
         ;       C = X coord (0-79)
         ; Output:
-        ;       HL = Tile address
-                push    bc
+        ;       HL = Tile address (base is $4000)
                 push    de
-                ld      e,b
+                ld      h,$20
+                ld      l,c         ; HL = tilemap base address $4000/2 + X coord
                 ld      d,80
-                mul                 ; DE = 80Y
-                ex      de,hl       ; HL = 80Y
+                ld      e,b
+                mul     de
+                add     hl,de
+                add     hl,hl
                 pop     de
-                ld      b,$20       ; BC = tilemap base address $4000/2 + X coord
-                add     hl,bc
-                add     hl,hl       ; 2 bytes per tilemap cell
-                pop     bc
                 ret
 
-;;----------------------------------------------------------------------------------------------------------------------
-;; Low-level printing
+;;----------------------------------------------------------------------------------------
+;; Calculate address of line B (0..101) into the tilemap = HL
 
-Print:
-        ; Input
-        ;       B = Y coord (0-31)
-        ;       C = X coord (0-79)
-        ;       DE = string
-        ;       A = colour (0-15)
-        ; Output:
-        ;       DE = points after string
-        ; Uses:
-        ;       BC, HL, DE, A
-
-        ; Calculate tilemap address
-                call    CalcTileAddress
-                swapnib
-                ld      c,a
-                jr      .loopEntry
-.l1             ld      (hl),a      ; Write out character
-                inc     hl
-                ld      (hl),c      ; Write out attribute
-                inc     hl
-.loopEntry      ld      a,(de)      ; Read next string character
-                inc     de
-                and     a
-                jr      nz,.l1
-                ret
-
-PrintChar:
+CalcLineAddress:
         ; Input:
-        ;       B = Y coord (0-31)
-        ;       C = X coord (0-79)
-        ;       D = Colour (0-15)
-        ;       E = character
+        ;       B = Y coord (0-101)
         ; Output:
-        ;       HL = Tilemap address of following position
-        ; Uses:
-        ;       A
-                call    CalcTileAddress
-                ld      (hl),e
-                inc     hl
-                ld      a,d
-                swapnib
-                ld      (hl),a
-                inc     hl
+        ;       HL = Tile address (base is $4000)
+                push    de
+                ld      hl,$4000
+                ld      d,160
+                ld      e,b
+                mul     de
+                add     hl,de
+                pop     de
                 ret
 
-AdvancePos:
-        ; Advances position to next position on screen.  This will wrap to next line or back to the top of the screen.
-        ; Input:
-        ;       B = Y coord (0-31)
-        ;       C = X coord (0-79)
-        ; Output:
-        ;       BC = next position XY.
-        ; Uses:
-        ;       A
-        ;
-                inc     c
-                ld      a,80
-                sub     c
-                ret     nz
-                ld      c,a
-                inc     b
-                ld      a,32
-                sub     b
-                ret     nz
-                ld      b,a
-                ret
+;;----------------------------------------------------------------------------------------
+;; Draw a rectangular area of spaces
 
 WriteSpace:
-        ; Draw a rectangular area of spaces
         ; Input
-        ;       B = Y coord (0-31) of start
+        ;       B = Y coord (0-101) of start
         ;       C = X coord (0-79) of start
-        ;       D = height
-        ;       E = width
+        ;       D = height (1-102)
+        ;       E = width (1-80)
         ;       A = colour (0-15)
         ; Uses:
-        ;       HL, BC, DE, A
+        ;       HL, DE, A
+                push    bc
                 call    CalcTileAddress     ; HL = start corner
                 swapnib
                 ld      c,a                 ; C = colour
@@ -679,27 +646,85 @@ WriteSpace:
                 add     a,a                 ; A = 160 - 2*width = deltaHL
 .row            ld      b,e                 ; reset width counter
 .col            ld      (hl),' '            ; Write space
-                inc     hl
+                inc     l                   ; only L: even -> odd value, can't overflow
                 ld      (hl),c              ; Write colour
                 inc     hl
                 djnz    .col
                 add     hl,a                ; HL = next row
                 dec     d
                 jr      nz,.row
+                pop     bc
                 ret
 
-ClearScreen:
-        ; Clear screen (write spaces in colour 0 everywhere = full bottom 8kiB clear)
+;;----------------------------------------------------------------------------------------
+;; Utilities
+
+;;----------------------------------------------------------------------------------------
+;; Low-level printing
+
+Print:
+        ; Input
+        ;       B = Y coord (0-101)
+        ;       C = X coord (0-79)
+        ;       DE = string (make sure the string will fit into virtual map!)
+        ;       A = colour (0-15)
+        ; Output:
+        ;       DE = points after string
         ; Uses:
-        ;       BC, HL, A
-                push    de
-                ld      bc,$2000-2
-                ld      hl,$4002
-                ld      de,hl               ; fake
-                dec     l
-                ld      (hl),0
-                dec     l
-                ld      (hl),' '
-                ldir
-                pop     de
+        ;       BC, HL, DE, A
+
+                call    video.CalcTileAddress
+                swapnib
+                ld      c,a
+                jr      .loopEntry
+.l1             ld      (hl),a      ; Write out character
+                inc     l           ; only L: even -> odd value, can't overflow to H
+                ldi     (hl),c      ; fake [HL++] = C ; Write out attribute
+.loopEntry      ldi     a,(de)      ; fake A = [DE++] ; Read next string character
+                or      a
+                jr      nz,.l1
                 ret
+
+PrintChar:
+        ; Input:
+        ;       B = Y coord (0-101)
+        ;       C = X coord (0-79)
+        ;       D = Colour (0-15)
+        ;       E = character
+        ; Output:
+        ;       HL = Tilemap address of following position
+        ; Uses:
+        ;       A
+                call    video.CalcTileAddress
+                ld      (hl),e
+                inc     l           ; only L: even -> odd value, can't overflow to H
+                ld      a,d
+                swapnib
+                ldi     (hl),a      ; fake [HL++] = A ; Write out attribute
+                ret
+
+AdvancePos:
+        ; Advances position to next position on screen. This will wrap to next line.
+        ; When at the last row of virtual map (depends on VIDEO_FONT_ADR), wraps to Y=0
+        ; Input:
+        ;       B = Y coord (0-?) (0..50 font=$6000, 0..75 font=$7000)
+        ;       C = X coord (0-79)
+        ; Output:
+        ;       BC = next position XY.
+        ; Uses:
+        ;       A
+                inc     c
+                ld      a,80
+                sub     c
+                ret     nz
+                ld      c,a
+                inc     b
+                ld      a,VIRTUAL_ROWS
+                sub     b
+                ret     nz
+                ld      b,a
+                ret
+
+    ENDMODULE
+
+;;----------------------------------------------------------------------------------------

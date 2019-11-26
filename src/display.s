@@ -117,11 +117,11 @@ DisplayScreen:
                 ld      bc,$0000        ; At (0,0)
                 ld      de,$0150        ; 80x1
                 ld      a,1             ; Colour 2
-                call    WriteSpace
+                call    video.WriteSpace
                 ld      bc,$0001
                 ld      de,Title
                 ld      a,1
-                call    Print
+                call    video.Print
 
         ; Status bar
                 ld      a,(videoMaxY)
@@ -132,12 +132,12 @@ DisplayScreen:
                 push    bc              ; keep it also for drawing rows of text
                 ld      de,$0150
                 ld      a,1
-                call    WriteSpace
+                call    video.WriteSpace
                 pop     bc
                 inc     c
                 ld      de,Footnote
                 ld      a,1
-                call    Print
+                call    video.Print
 
                 ;;; DEBUG BEGIN
                 ; one more extra footnote beyond the screen to debug 80x42.6 mode
@@ -146,12 +146,12 @@ DisplayScreen:
                 inc     b
                 ld      de,Footnote
                 ld      a,9
-                call    Print
+                call    video.Print
                 ;;; DEBUG END
 
         ; Write the rows
                 ld      bc,$0100
-                call    CalcTileAddress
+                call    video.CalcTileAddress
                 ex      de,hl           ; DE = Tile address
                 push    de
                 ld      hl,(top)        ; HL = Pointer to document that is at the top
@@ -173,7 +173,7 @@ DisplayCursor:
         ;       A = cursor colour slot (0-15)
                 push    de
                 push    hl
-                call    CalcTileAddress
+                call    video.CalcTileAddress
                 inc     hl                      ; Advance to attribute part
         
                 swapnib
@@ -229,13 +229,13 @@ DebugByte:
                 call    GetNibble
                 push    de                      ; Store next value
                 ld      d,14                    ; Colour 14
-                call    PrintChar               ; Print the upper nibble
+                call    video.PrintChar         ; Print the upper nibble
                 pop     de                      ; Restore next value
                 ld      a,d
                 inc     c                       ; Increment X coord
                 call    GetNibble               ; Get ASCII for next nibble
                 ld      d,13                    ; Colour 13
-                call    PrintChar               ; Print the lower nibble
+                call    video.PrintChar         ; Print the lower nibble
                 inc     c
                 ret
 

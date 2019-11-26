@@ -7,7 +7,6 @@ IFDEF _SJASMPLUS
         OPT --zxnext=cspect         ; enable also Z80N instructions
         DEFINE message DISPLAY /D,  ; DISPLAY is mostly compatible with snasm MESSAGE
         DEFINE PC +($)              ; for current address the operator "$" has to be used
-        MACRO mul : @mul de : ENDM  ; MUL needs explicit registers in sjasmplus
         DEVICE ZXSPECTRUM48         ; setup virtual device for SAVESNA functionality
         CSPECTMAP "ed.sna.map"
 
@@ -42,18 +41,18 @@ CMDBUFFER       equ     $bd
 ; $0000         ROM
 ; $2000         ROM
 ; $4000         Tilemap
-; $5b00         256 circular buffer
 ; $6000         Tiles
-; $7fff         Code
+; $8000         IM2 interrupt table (->$8181)
+; $8101         code
 ; $bd00         Commandbuffer
-; $be00         Keyboard buffer
+; $be00         Keyboard circular buffer
 ; $bf00         Stack
 ; $c000         Data
 
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Font
 
-        org     $6000
+        org     video.FONT_ADR
 
         include "../data/tilemap_font_8x6.i.s"
 ;         incbin  "../data/font.bin"
@@ -95,7 +94,7 @@ Start:
 ;; Initialise the screen and video modes
 
 Initialise:
-                call    InitVideo
+                call    video.InitVideo
                 ret
 
 ;;----------------------------------------------------------------------------------------------------------------------
@@ -112,7 +111,36 @@ Initialise:
 ;; The main loop
 
 Main:
-                call    ClearScreen
+                call    video.ClearScreen
+
+;; TEST video.CalcTileAddress
+;                 ld      de,$BEEF
+;                 ld      a,$F0
+;                 ld      bc,$0000    ; => $4000
+;                 call    video.CalcTileAddress
+;                 ld      bc,$0100    ; => $40A0
+;                 call    video.CalcTileAddress
+;                 ld      bc,$0001    ; => $4002
+;                 call    video.CalcTileAddress
+;                 ld      bc,$0a00    ; => $4640
+;                 call    video.CalcTileAddress
+;                 ld      bc,$000a    ; => $4014
+;                 call    video.CalcTileAddress
+;                 ld      bc,$4433    ; => $6ae6
+;                 call    video.CalcTileAddress
+
+;; TEST video.CalcLineAddress
+;                 break
+;                 ld      de,$BEEF
+;                 ld      a,$F0
+;                 ld      bc,$00F0    ; => $4000
+;                 call    video.CalcLineAddress
+;                 ld      b,$01       ; => $40A0
+;                 call    video.CalcLineAddress
+;                 ld      b,$0a       ; => $4640
+;                 call    video.CalcLineAddress
+;                 ld      b,$44       ; => $6a80
+;                 call    video.CalcLineAddress
 
 ;; TEST video.GetInvisibleScanlines_byMode
 ;                 xor     a
@@ -124,31 +152,6 @@ Main:
 ;                 inc     a
 ;                 cp      video.MODE_COUNT+1
 ;                 jr      nz,.TestGetInvisibleScanlines
-
-; .detectModeLoop
-;                 call    video.DetectMode
-;                 ld      hl,ModeNamePtrs
-;                 add     hl,a
-;                 add     hl,a
-;                 ld      de,(hl)     ; fake ; de = mode name string
-;                 call    video.DetectCSpectEmulator
-;                 ld      a,b         ; show regular HW as white text on black paper
-;                 xor     1           ; a = 0 (HW Z80N) / 1 (CSpect = inverted colours)
-;                 ld      bc,$1022
-;                 call    Print
-;                 halt
-;                 jr      .detectModeLoop
-; ModeNamePtrs:
-;                 dw      .Hdmi50,.Zx48_50,.zx128_50,.pentagon
-;                 dw      .Hdmi60,.Zx48_60,.zx128_60,.invalid
-; .Hdmi50         dz      "HDMI 50Hz    "
-; .Zx48_50        dz      "ZX48 50Hz    "
-; .zx128_50       dz      "ZX128 50Hz   "
-; .pentagon       dz      "Pentagon 50Hz"
-; .Hdmi60         dz      "HDMI 60Hz    "
-; .Zx48_60        dz      "ZX48 60Hz    "
-; .zx128_60       dz      "ZX128 60Hz   "
-; .invalid        dz      "invalid Pen60"
 
 MainLoop:
                 call    video.CopperNeedsReinit
@@ -170,7 +173,7 @@ MainLoop:
                 ld      bc,$2300
                 ld      de,$0624
                 xor     a
-                call    WriteSpace
+                call    video.WriteSpace
                 ld      hl,$4000+($24*160)+4
                 call    .debugFullTileSet
                 ld      hl,$4000+($24*160)+80
@@ -202,7 +205,7 @@ MainLoop:
 
 ;                jr      $       ; comment this out to see colour blocks advancing
 4:
-                ld      b,140
+                ld      b,204
 1:
                 ei
                 halt
@@ -215,14 +218,15 @@ MainLoop:
 ;                 pop     bc
 
 ;; FIXME test of new rewrite of copper code generator
-                ld      a,1
-                out     (254),a
                 ; make third map "scroll" (by changing skipped scanlines
                 ld      a,b
-                ld      (.map3.skipScanlines),a
                 srl     a
+                ld      (.map3.skipScanlines),a
                 ld      (.map2.tilemapY),a
+                srl     a
+                ld      (.map3.xOffset),a
                 ; force re-init any way
+;                 and     (1<<3)-1 : jr nz,100F     ; every n-th frame only
                 ld      a,video.MODE_COUNT
                 ld      (video.CopperNeedsReinit.CurrentMode),a
 ;                jr      100F
@@ -230,18 +234,14 @@ MainLoop:
                 jr      z,100F  ; no reinit needed
                 call    video.GetInvisibleScanlines_byMode
                 ld      de,.debugSDisMap
-                ld      a,2
-                out     (254),a
                 call    video.CopperReinit
-                xor     a
-                out     (254),a
                 jr      100F
 .debugSDisMap:
 ;                 video.SDisplayMap { 42, 0, 2 }
 ;                 db      0
                 video.SDisplayMap { 5, 0, 1 }
 .map2:          video.SDisplayMap { 12, 0, 2 }
-.map3:          video.SDisplayMap { 12, 0, 4 }
+.map3:          video.SDisplayMap { 20, 0, 4 }
                 db      0
 100:
                 pop     bc
