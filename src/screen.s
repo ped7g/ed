@@ -263,7 +263,7 @@ CopperReinit:
         ;       Copper is reprogrammed and started (in %01 mode, wrap-around infinite run)
         ; Uses:
         ;       AF, BC, DE, HL, IX
-        ;       side effect: selects NextReg $60 on I/O port
+        ;       side effect: selects NextReg $63 on I/O port
                 ; remember which mode will be inited now
                 ld      a,(ix + SDisplayCfg.modeNumber)
                 ld      (CopperNeedsReinit.CurrentMode),a
@@ -287,7 +287,7 @@ CopperReinit:
                 nextreg $62,0           ; COPPER_CONTROL_HI_NR_62
                 ; set COPPER_DATA for write by OUT (c)
                 ld      bc,$243B        ; TBBLUE_REGISTER_SELECT_P_243B
-                ld      a,$60           ; COPPER_DATA_NR_60
+                ld      a,$63           ; COPPER_DATA_16B_NR_63
                 out     (c),a           ; select copper data register
                 inc     b               ; BC = TBBLUE_REGISTER_ACCESS_P_253B
                 ;; IX = SDisplayMap array, HL = W-line, BC = $253B I/O port
@@ -314,7 +314,7 @@ CopperReinit:
                 ld      d,a             ; D = low 3 bits of copper index, top bits set (-8..-1 value)
                 ; fill up remaining copper code with NOOPs - actual fill
                 ld      bc,$243B        ; TBBLUE_REGISTER_SELECT_P_243B
-                ld      a,$60           ; COPPER_DATA_NR_60
+                ld      a,$63           ; COPPER_DATA_16B_NR_63
                 out     (c),a           ; select copper data register
                 inc     b               ; BC = TBBLUE_REGISTER_ACCESS_P_253B
                 xor     a
