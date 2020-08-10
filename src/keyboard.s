@@ -9,13 +9,14 @@
 
                 org     $8000
 
+Im2Vectors:
                 ds      257,$81         ; Interrupt vector table
 
 BUFFERPAGE      equ     $be
 
 InitKeys:
                 di
-                ld      a,$7f
+                ld      a,high Im2Vectors
                 ld      i,a
                 im      2
                 ei

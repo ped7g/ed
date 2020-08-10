@@ -298,9 +298,9 @@ CopperReinit:
                 nextreg $62,%01'000'000 ; COPPER_CONTROL_HI_NR_62 ; restart copper from 0
                 call    .DisplayMapLoopEntry
                 ; add tilemap OFF after last display map (WAIT is already inserted)
-                ld      e,$6B           ; TILEMAP_CONTROL_NR_6B
+                ld      de,$6B          ; E = TILEMAP_CONTROL_NR_6B, D = 0
                 out     (c),e
-                out     (c),0           ; switch OFF tilemap
+                out     (c),d           ; switch OFF tilemap
                 ; fill up remaining copper code with NOOPs - calculate amount of NOOPs
                 ld      a,$62           ; COPPER_CONTROL_HI_NR_62
                 call    ReadNextReg     ; read it for calculating count + starting copper
@@ -340,9 +340,9 @@ CopperReinit:
                 ld      a,(ix + SDisplayMap.skipScanlines)
                 or      a
                 jr      z,.noSkipScanline
-                ld      e,$6B           ; TILEMAP_CONTROL_NR_6B
+                ld      de,$6B          ; E = TILEMAP_CONTROL_NR_6B, D = 0
                 out     (c),e
-                out     (c),0           ; switch OFF tilemap
+                out     (c),d           ; switch OFF tilemap
                 add     hl,a            ; Wline += skipLines
                 call    .HandleOnTopBorderLeave
                 out     (c),h           ; WAIT
