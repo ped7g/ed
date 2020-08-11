@@ -147,7 +147,7 @@ InitVideo:
                 nextreg $1B,159
                 nextreg $1B,0
                 nextreg $1B,255
-                nextreg $4A,$04                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = dark green
+                nextreg $4A,$08                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = green
                 ; make sure the need of copper init is signalled
                 ld      a,video.MODE_COUNT
                 ld      (video.CopperNeedsReinit.CurrentMode),a
@@ -327,43 +327,18 @@ CopperReinit:
                 out     (c),l
                 ; start copper before the full code is generated to maximize chance
                 ; to catch "this" frame, if the generator was called early after interrupt
-                nextreg $62,%01'000'000 ; COPPER_CONTROL_HI_NR_62 ; restart copper from 0
+                nextreg $62,%11'000'000 ; COPPER_CONTROL_HI_NR_62 ; restart copper from 0 at [0,0] every frame
                 call    .DisplayMapLoopEntry
                 ; add tilemap OFF after last display map (WAIT is already inserted)
                 ld      de,$6B          ; E = TILEMAP_CONTROL_NR_6B, D = 0
                 out     (c),e
                 out     (c),d           ; switch OFF tilemap
+                ; add COPPER_HALT instruction to wait for another restart at [0,0]
+                ld      a,$FF
+                out     (c),a
+                out     (c),a
         IFDEF DBG_COPPER_REINIT_PERFORMANCE
-                    nextreg $4A,$90                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = yellow (debug)
-        ENDIF
-                ; fill up remaining copper code with NOOPs - calculate amount of NOOPs
-                ld      a,$62           ; COPPER_CONTROL_HI_NR_62
-                call    ReadNextReg     ; read it for calculating count + starting copper
-                ld      d,a
-                ld      a,$61           ; COPPER_CONTROL_LO_NR_61
-                call    ReadNextReg
-                ld      e,a             ; DE = current copper index (11 bit value 0..2047 + copper mode)
-                ld      b,3
-                bsrl    de,b            ; E = current copper index>>3 (8bit 0..255)
-                ld      hl,.NoopFillLoop
-                and     %0000'0111
-                add     a,a             ; low 3 bits of copper index * 2 (0, 2, ..., 14)
-                add     hl,a            ; address into unrolled block of `out (c),a`
-                ; fill up remaining copper code with NOOPs - actual fill
-                ld      bc,$243B        ; TBBLUE_REGISTER_SELECT_P_243B
-                ld      a,$63           ; COPPER_DATA_16B_NR_63
-                out     (c),a           ; select copper data register
-                inc     b               ; BC = TBBLUE_REGISTER_ACCESS_P_253B
-                xor     a
-                ; align the 3-bit small value (jump at remaining unrolled outs to align to 8x)
-                jp      hl
-                ; burst the rest in 8x unrolled outs
-.NoopFillLoop: .8 out (c),a            ; unroll for better performance
-                inc     e
-                jp      nz,.NoopFillLoop
-;     nextreg $62,%01'000'000 ; FIXME test CSPECT
-        IFDEF DBG_COPPER_REINIT_PERFORMANCE
-                    nextreg $4A,$04                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = green (debug)
+                    nextreg $4A,$08                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = green (debug)
         ENDIF
                 ret
 
@@ -430,14 +405,15 @@ CopperReinit:
                 sub     l               ; A = low(tilemapY*8 - scanline)
                 out     (c),a
                 ; scanline += 6
-                add     hl,6
+                ld      a,6
+                add     hl,a
                 out     (c),h           ; WAIT
                 out     (c),l
                 ; ++tilemapY and set CF in "F'" when base address needs update
                 ld      a,8
                 add     a,e
                 ld      e,a
-                ex      af,af'          ; A = rows counter
+                ex      af,af'          ; A = rows counter (and preserve CF indicator)
                 bit     0,h
                 ret     nz              ; 256 <= scanline, gone outside of screen
                 dec     a
