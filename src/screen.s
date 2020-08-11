@@ -368,7 +368,8 @@ CopperReinit:
                 ret
 
 .DisplayMapLoop:
-                .(SDisplayMap) inc ix   ; ++displayMapPtr
+                ld      de,SDisplayMap
+                add     ix,de           ; ++displayMapPtr
 .DisplayMapLoopEntry:
                 ld      a,(ix + SDisplayMap.rows)
                 or      a
@@ -402,12 +403,16 @@ CopperReinit:
                 ld      e,(ix + SDisplayMap.tilemapY)
                 ld      d,8
                 mul     de              ; DE = tilemapY*8
-                ld      a,e
-                sub     l               ; A = low(tilemapY*8 - scanline)
-                ex      af,af'
+                ; force setup of tilemap base address ahead of first row
+                scf
+                ex      af,af'          ; CF in F'
+                ; rows counter in regular A
                 ld      a,(ix + SDisplayMap.rows)
 .Row6pxLoop:
-                ;; IX = SDisplayMap, HL = W-line, BC = $253B I/O port, DE = tilemapY*8, A = rows, A' = low(tilemapY*8 - scanline)
+                ;; IX = SDisplayMap, HL = W-line, BC = $253B I/O port, DE = tilemapY*8
+                ; A = rows counter, F' = CF when base address must be set
+                ex      af,af'
+                jp      nc,.skipBaseAddressSetup
                 ; set up base address of tilemap = (tilemapY/32 * (high 32*160))
                 push    de              ; D = tilemapY/32 (because DE = tilemapY*8)
                 ld      e,high (32*160)
@@ -415,21 +420,24 @@ CopperReinit:
                 ld      d,$6E           ; TILEMAP_BASE_ADR_NR_6E
                 out     (c),d
                 out     (c),e
-                ; set y offset = tilemapY*8 - scanline
-                ld      d,$31           ; TILEMAP_YOFFSET_NR_31 = yOfs
-                out     (c),d
-                ex      af,af'
-                out     (c),a
-                ; low(tilemapY*8 - scanline) += 2
-                add     a,2
-                ex      af,af'
-                ; ++tilemapY
                 pop     de
-                add     de,8
+                inc     d               ; adjust D for next base address setup
+.skipBaseAddressSetup:
+                ; set y offset = tilemapY*8 - scanline
+                ld      a,$31           ; TILEMAP_YOFFSET_NR_31 = yOfs
+                out     (c),a
+                ld      a,e
+                sub     l               ; A = low(tilemapY*8 - scanline)
+                out     (c),a
                 ; scanline += 6
                 add     hl,6
                 out     (c),h           ; WAIT
                 out     (c),l
+                ; ++tilemapY and set CF in "F'" when base address needs update
+                ld      a,8
+                add     a,e
+                ld      e,a
+                ex      af,af'          ; A = rows counter
                 bit     0,h
                 ret     nz              ; 256 <= scanline, gone outside of screen
                 dec     a
