@@ -57,6 +57,9 @@ CMDBUFFER       equ     $bd
         include "../data/tilemap_font_8x6.i.s"
 ;         incbin  "../data/font.bin"
 
+;; TODO - check https://damieng.com/typography/zx-origins/ web page for various fonts
+;;        and see if dynamic loading from 1bpp file can be supported by module `video`
+
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Sample text
 
@@ -154,6 +157,8 @@ Main:
 ;                 jr      nz,.TestGetInvisibleScanlines
 
 MainLoop:
+                ld      a,5
+                out     (254),a
                 call    video.CopperNeedsReinit
                 jr      z,.videoConfigIsOk
                 call    video.GetInvisibleScanlines_byMode
@@ -232,6 +237,7 @@ MainLoop:
 ;                jr      100F
                 call    video.CopperNeedsReinit
                 jr      z,100F  ; no reinit needed
+                call    video.SetCopperIsInitialized
                 call    video.GetInvisibleScanlines_byMode
                 ld      de,.debugSDisMap
                 call    video.CopperReinit
@@ -239,8 +245,8 @@ MainLoop:
 .debugSDisMap:
 ;                 video.SDisplayMap { 42, 0, 2 }
 ;                 db      0
-                video.SDisplayMap { 5, 0, 1 }
-.map2:          video.SDisplayMap { 12, 0, 2 }
+                video.SDisplayMap { 4, 0, 1 }
+.map2:          video.SDisplayMap { 12, 0, 7 }
 .map3:          video.SDisplayMap { 20, 0, 4 }
                 db      0
 100:

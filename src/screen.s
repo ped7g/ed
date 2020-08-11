@@ -3,6 +3,7 @@
 ;;----------------------------------------------------------------------------------------
 ;; # List of functions:
 ;; InitVideo                    - set up tilemode 80x42 (except copper), 28MHz, ...
+;;      - also shifts scanline "0" 33 lines up (just one line above the 640x256 area)
 ;; DetectMode                   - returns video.MODE_* value (current display mode)
 ;; CopperNeedsReinit            - ZF=0 when copper needs reinit (mode change detected)
 ;; GetModeConfigData            - converts video.MODE_* value to address of mode data
@@ -18,6 +19,10 @@
 ;; PrintChar                    - print single character
 ;; AdvancePos                   - advance BC coordinates to next position in virtual map
 ;;----------------------------------------------------------------------------------------
+
+    ; include the displayedge runtime library - FIXME migrate to displayedge_rt
+;     DEFINE USE_TO_READ_NEXT_REG ReadNextReg
+;     INCLUDE "displayedge_rt.i.asm"
 
     ; default values for configuration-defines
     IFNDEF VIDEO_FONT_ADR
@@ -38,15 +43,15 @@
 
     MODULE video
 
-FONT_ADR            = VIDEO_FONT_ADR                ; convert DEFINE to regular symbol
+FONT_ADR            EQU VIDEO_FONT_ADR          ; convert DEFINE to regular symbol
 
-VIRTUAL_ROWS        = (VIDEO_FONT_ADR - $4000)/160  ; 51 for font=$6000, 76 for $7000
+VIRTUAL_ROWS        EQU (FONT_ADR - $4000)/160  ; 51 for font=$6000, 76 for $7000
 
     STRUCT SDisplayMap
-; Account for the current "fully visible 6px rows" from GetInvisibleScanlines, creating
+; Account for the current "fully visible text rows" from GetInvisibleScanlines_*, creating
 ; layout which fits on screen (if the layout is higher, the generator should survive it,
 ; but it isn't recommended situation, the layout should be valid for current video mode).
-; The invisible top scanlines are skipped by default, "skipScanlines" is in visible range
+; You must skip the reported invisible lines yourself by adding them to "skipScanlines".
 ; the xOffset must be valid 0..79 value only, otherwise illegal values will be sent to
 ; NextReg $2F (will work on core 3.0 as expected, but may stop working in newer cores).
 rows                BYTE    0   ; number of rows (0 = end of list, 1..43)
@@ -67,7 +72,8 @@ MODE_PENTAGON_50    EQU         3
 MODE_HDMI_60        EQU         4
 MODE_ZX48_60        EQU         5
 MODE_ZX128_60       EQU         6
-MODE_COUNT          EQU         7   ; pentagon at 60Hz is invalid combination
+MODE_PENTAGON_60    EQU         7   ; the board will generate identical signal as Pentagon 50Hz (!)
+MODE_COUNT          EQU         8
 
     STRUCT SDisplayCfg
 modeNumber          BYTE            ; to have it accessible even if input argument is just IX pointer
@@ -92,7 +98,7 @@ DisplayCfgTab:
 .hdmi_60            SDisplayCfg MODE_HDMI_60,       229, 15, 12     ; => 38 rows +1px
 .zx48_60            SDisplayCfg MODE_ZX48_60,       229,  9         ; => 41 rows +1px
 .zx128_60           SDisplayCfg MODE_ZX128_60,      228, 10         ; => 41 rows +0px
-; pentagon 60Hz is not an option (values as ZX48)
+.pentagon2          SDisplayCfg MODE_PENTAGON_60,   287             ; has identical signal as 50Hz
 .invalid            SDisplayCfg MODE_COUNT,         229,  9
 
 ;;----------------------------------------------------------------------------------------
@@ -102,30 +108,35 @@ DisplayCfgTab:
 ;; by CopperNeedsReinit or by change in layout done by app itself.
 ;;
 ;; Settings:
-;;   black border, ULA disabled, 28MHz turbo selected, keys F8+F3+Multiface enabled
-;;   4bit tilemode 80x32 with attribute bytes, tiles base to VIDEO_FONT_ADR
+;;   Shifts scanline "0" 33 lines up (just one line above the 640x256 area)
+;;   28MHz turbo selected, black border, ULA disabled, keys F8+F3+Multiface enabled
+;;   4bit tilemode 80x32 with attribute bytes, tiles base to video.FONT_ADR
 ;;   resets tilemode clip window (to full 640x256), sets palette
-;;   clears tilemap (from $4000 to VIDEO_FONT_ADR)
+;;   clears tilemap (from $4000 to video.FONT_ADR)
 
 InitVideo:
+                nextreg $07,3                   ; Set speed to 28Mhz
                 xor     a
                 out     (254),a                 ; black border
 
                 call    SetFullTilemapPalette   ; setup tilemode palette
-                call    ClearScreen             ; reset the $4000..VIDEO_FONT_ADR region
+                call    ClearScreen             ; reset the $4000..FONT_ADR region
                 ; enable F8, F3 and Multiface
                 ld      a,$06
                 call    ReadNextReg
                 or      %1010'1000
                 nextreg $06,a
+                ; shift scanline counters 33 lines up, so the "0" is the last line above
+                ; 640x256 mode (requires core 3.1.5+)
+                nextreg $64,33                  ; VIDEO_LINE_OFFSET_NR_64
                 ; set other NextRegs to default settings of 80x42 tilemode component
-                nextreg $07,3                   ; Set speed to 28Mhz
                 nextreg $6b,%11000001           ; Tilemap control
                     ;*; +enable+80col-noAttr-palNum-textMode-r-512tile+forceTmOverUla
                 ; $6E (TILEMAP_BASE_ADR_NR_6E) is not set up, because copper code does it
                 ; The "tilemapY" value in config is like 0..101, into map starting @ $4000
-                ; But the tiles def (font) must also reside somewhere, use tilemapY around
-                nextreg $6f,high VIDEO_FONT_ADR ; Tiles base offset
+                ; But the tiles def (font) resides after map, cutting down available space
+                ; ("tilemapY" can be 0..76 for font at $7000 and 0..51 for font at $6000)
+                nextreg $6f,high FONT_ADR       ; Tiles base offset
                 nextreg $4c,$0f                 ; Transparency colour (last item)
                 nextreg $68,%10000000           ; Disable ULA output
                     ;*; +disableUla-blending-r-r-r-r-r-stencil
@@ -140,9 +151,11 @@ InitVideo:
                 ret
 
 ;;----------------------------------------------------------------------------------------
+;FIXME - rather sync with displayedge variant
 ;; Detect current video mode:
 ;; 0, 1, 2, 3 = HDMI, ZX48, ZX128, Pentagon (all 50Hz), add +4 for 60Hz modes
-;; (Pentagon 60Hz is not a valid mode => value 7 shouldn't be returned in A)
+;; (Pentagon 60Hz is reported as Pentagon 50Hz => value 7 shouldn't be returned in A)
+;; (because FPGA does ignore the 50/60Hz bit and will produce the Pentagon ~49Hz signal)
 
 DetectMode:
         ; Output:
@@ -191,6 +204,13 @@ CopperNeedsReinit:
                 cp      b               ; set ZF (ZF=1 => copper code is still valid)
                 ret
 
+;FIXME add docs
+SetCopperIsInitialized:
+        ; Input:
+        ;       A = mode number for which copper is initialized (0..6 like in DetectMode)
+                ld      (CopperNeedsReinit.CurrentMode),a
+                ret
+
 ;;----------------------------------------------------------------------------------------
 ;; Set IX to point to the mode-config data
 
@@ -224,8 +244,8 @@ GetInvisibleScanlines_byMode:
         ;       A = mode to read values for (0..6 like in DetectMode)
         ; Output:
         ;       D = invisible top lines
-        ;       E = invisible top lines
-        ;       B = fully visible 6px heigh rows
+        ;       E = invisible bottom lines
+        ;       B = fully visible text rows (6px)
         ;       A = remaining visible scanlines after last full row (0..5)
         ;       IX = pointer to SDisplayCfg structure
 
@@ -236,15 +256,15 @@ GetInvisibleScanlines_byIX:
         ;       IX = pointer to SDisplayCfg structure
         ; Output:
         ;       D = invisible top lines
-        ;       E = invisible top lines
-        ;       B = fully visible 6px heigh rows
+        ;       E = invisible bottom lines
+        ;       B = fully visible text rows (6px)
         ;       A = remaining visible scanlines after last full row (0..5)
 
                 ld      d,(ix+SDisplayCfg.invisibleTop)
                 ld      e,(ix+SDisplayCfg.invisibleBottom)
                 ; calculate fully visible 6px heigh tile-rows (258px = 43 rows)
                 ld      b,42            ; fully visible rows init (-1 already done)
-                ld      a,-2            ; 640x256 tile-mode has 2px invisible (42.66)
+                ld      a,-2            ; 640x256 tile-mode has 2px invisible (42.66 rows)
                 sub d : sub e           ; A = -(total invisible scanlines)
 .calcVisibleRows:
                 add     a,6
@@ -258,33 +278,18 @@ GetInvisibleScanlines_byIX:
 CopperReinit:
         ; Input:
         ;       DE = pointer to SDisplayMap array (terminating item has `rows == 0`)
-        ;       IX = pointer to SDisplayCfg structure
         ; Output:
         ;       Copper is reprogrammed and started (in %01 mode, wrap-around infinite run)
         ; Uses:
         ;       AF, BC, DE, HL, IX
         ;       side effect: selects NextReg $63 on I/O port
-                ; remember which mode will be inited now
-                ld      a,(ix + SDisplayCfg.modeNumber)
-                ld      (CopperNeedsReinit.CurrentMode),a
                 ; init the copper code generator variables
-                ld      hl,(ix + SDisplayCfg.startScanline) ; ok ; HL = first scanline
-                add     hl,$8000 | (HORIZONTAL_COMPARE<<9)  ; turn it into copper WAIT instruction
-                ld      a,l
-                add     a,32            ; last valid WAIT (+1 is first overflown)
-                ld      (.checkWscanMaxLo),a
-                negR16toR16 hl,bc       ; BC = constant to convert the WAIT into scanline
-                ld      (.Lscan2Wscan1),hl  ; scanline -> WAIT W-line
-                ld      (.Wscan2Lscan1),bc  ; WAIT W-line -> scanline
-                ld      (.Wscan2Lscan2),bc  ; WAIT W-line -> scanline
-                ; advance the first wait by invisible top lines
-                ld      a,(ix + SDisplayCfg.invisibleTop)
-                add     hl,a
+                ld      hl,$8000 | (HORIZONTAL_COMPARE<<9)  ; copper WAIT scanline 0
                 ld      ix,de           ; ok ; IX = Display map array
                 ;; IX = SDisplayMap array, HL = W-line
                 ; set up Copper control to "stop" + index 0
+                nextreg $62,0           ; COPPER_CONTROL_HI_NR_62 - STOP first (should not matter)
                 nextreg $61,0           ; COPPER_CONTROL_LO_NR_61
-                nextreg $62,0           ; COPPER_CONTROL_HI_NR_62
                 ; set COPPER_DATA for write by OUT (c)
                 ld      bc,$243B        ; TBBLUE_REGISTER_SELECT_P_243B
                 ld      a,$63           ; COPPER_DATA_16B_NR_63
@@ -328,6 +333,7 @@ CopperReinit:
 .NoopFillLoop2Entry:
                 inc     e
                 jp      nz,.NoopFillLoop2
+;     nextreg $62,%01'000'000 ; FIXME test CSPECT
                 ret
 
 .DisplayMapLoop:
@@ -344,7 +350,6 @@ CopperReinit:
                 out     (c),e
                 out     (c),d           ; switch OFF tilemap
                 add     hl,a            ; Wline += skipLines
-                call    .HandleOnTopBorderLeave
                 out     (c),h           ; WAIT
                 out     (c),l
 .noSkipScanline:
@@ -378,8 +383,6 @@ CopperReinit:
                 out     (c),e
                 pop     de
                 ; calculate y offset = tilemapY*8 - scanline
-.Wscan2Lscan1:  equ     $+2
-                add     hl,$DEAD        ; self-modify, change W-scanline to scanline
                 push    de
                 ex      de,hl
                 sub     hl,de           ; ok
@@ -392,55 +395,22 @@ CopperReinit:
                 add     de,8
                 ; scanline += 6
                 add     hl,6
-                bit     0,h
-                push    af              ; NZ = (256 <= scanline) => remember this one
-.Lscan2Wscan1:  equ     $+2
-                add     hl,$DEAD        ; self-modify, change scanline to W-scanline
-                ; handle crossing of top-border to pixel-area
-                call    .HandleOnTopBorderLeave
                 out     (c),h           ; WAIT
                 out     (c),l
-                pop     af              ; restore rows counter and (256 <= scanline test)
+                bit     0,h
                 ret     nz              ; 256 <= scanline, gone outside of screen
                 dec     a
                 jp      nz,.Row6pxLoop
                 jp      .DisplayMapLoop
 
-.HandleOnTopBorderLeave:
-        ; Input:
-        ;       HL = WAIT W-scan overflow outside of top area
-        ; Output:
-        ;       HL = fixed WAIT W-scan
-        ; Uses:
-        ;       AF
-                ld      a,$80 | (HORIZONTAL_COMPARE<<1) | 1
-                cp      h
-                ret     nz              ; high byte must be equal when W overflows
-.checkWscanMaxLo: equ $ + 1
-                ld      a,$F0
-                cp      l
-                ret     nc              ; W is still valid
-                ; reconfigure W to WAIT(HORIZONTAL_COMPARE, scanline - 32 - 1)
-.Wscan2Lscan2:  equ     $+2
-                add     hl,$DEAD        ; self-modify, change W-line to scanline
-                ; reconfigure self-modify adders
-                push    de
-                ld      de,-($8000 | ((HORIZONTAL_COMPARE-1)<<9) | (-33&$1FF))
-                ld      (.Wscan2Lscan1),de  ; scanline -> W-line
-                ld      de,$8000 | ((HORIZONTAL_COMPARE-1)<<9) | (-33&$1FF)
-                ld      (.Lscan2Wscan1),de  ; scanline -> W-line
-                add     hl,de           ; HL = WAIT(HORIZONTAL_COMPARE, scanline - 32 - 1)
-                pop     de
-                ret
-
 ;;----------------------------------------------------------------------------------------
-;; Clear screen (write spaces in colour 0 everywhere in $4000..VIDEO_FONT_ADR region)
+;; Clear screen (write spaces in colour 0 everywhere in $4000..video.FONT_ADR region)
 
 ClearScreen:
         ; Uses:
         ;       BC, HL, A
                 push    de
-                ld      bc,VIDEO_FONT_ADR-$4002
+                ld      bc,FONT_ADR-$4002
                 ld      hl,$4001
                 ld      de,hl               ; fake de = hl
                 inc     de                  ; de = $4002
@@ -705,7 +675,7 @@ PrintChar:
 
 AdvancePos:
         ; Advances position to next position on screen. This will wrap to next line.
-        ; When at the last row of virtual map (depends on VIDEO_FONT_ADR), wraps to Y=0
+        ; When at the last row of virtual map (depends on video.FONT_ADR), wraps to Y=0
         ; Input:
         ;       B = Y coord (0-?) (0..50 font=$6000, 0..75 font=$7000)
         ;       C = X coord (0-79)
