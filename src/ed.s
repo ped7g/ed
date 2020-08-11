@@ -211,6 +211,7 @@ MainLoop:
 ;                jr      $       ; comment this out to see colour blocks advancing
 4:
                 ld      b,204
+                push    af
 1:
                 ei
                 halt
@@ -223,11 +224,16 @@ MainLoop:
 ;                 pop     bc
 
 ;; FIXME test of new rewrite of copper code generator
-                ; make third map "scroll" (by changing skipped scanlines
+                ; make content of second map scroll by tilemapY
+                ld      a,204
+                sub     b
+                srl     a
+                srl     a
+                ld      (.map2.tilemapY),a
+                ; make third map "scroll" (by changing skipped scanlines)
                 ld      a,b
                 srl     a
                 ld      (.map3.skipScanlines),a
-                ld      (.map2.tilemapY),a
                 srl     a
                 ld      (.map3.xOffset),a
                 ; force re-init any way
@@ -243,15 +249,17 @@ MainLoop:
                 call    video.CopperReinit
                 jr      100F
 .debugSDisMap:
-;                 video.SDisplayMap { 42, 0, 2 }
-;                 db      0
-                video.SDisplayMap { 4, 0, 1 }
-.map2:          video.SDisplayMap { 12, 0, 7 }
-.map3:          video.SDisplayMap { 20, 0, 4 }
-                db      0
+                        //        { skipLines,  Rows,   tilemapY,   xOffset }
+;                 video.SDisplayMap {         2,    42,          0 }
+;                 db      -1
+                video.SDisplayMap {         1,     4,          0 }
+.map2:          video.SDisplayMap {         7,    12,          0 }
+.map3:          video.SDisplayMap {         4,    20,         23 }
+                db      -1
 100:
                 pop     bc
                 djnz    1B
+                pop     af
 
                 ;; DEBUG read nextreg $6c (default tilemode attribute)
                 push    af

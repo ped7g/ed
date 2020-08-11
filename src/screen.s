@@ -20,7 +20,7 @@
 ;; AdvancePos                   - advance BC coordinates to next position in virtual map
 ;;----------------------------------------------------------------------------------------
 
-    DEFINE DBG_COPPER_REINIT_PERFORMANCE
+;     DEFINE DBG_COPPER_REINIT_PERFORMANCE
 
     ; include the displayedge runtime library - FIXME migrate to displayedge_rt
 ;     DEFINE USE_TO_READ_NEXT_REG ReadNextReg
@@ -56,12 +56,12 @@ VIRTUAL_ROWS        EQU (FONT_ADR - $4000)/160  ; 51 for font=$6000, 76 for $700
 ; You must skip the reported invisible lines yourself by adding them to "skipScanlines".
 ; the xOffset must be valid 0..79 value only, otherwise illegal values will be sent to
 ; NextReg $2F (will work on core 3.0 as expected, but may stop working in newer cores).
-rows                BYTE    0   ; number of rows (0 = end of list, 1..43)
+skipScanlines       BYTE    0   ; number of scanlines to skip (with tilemode off), -1 to end list
+rows                BYTE    0   ; number of rows (1..43)
 tilemapY            BYTE    0   ; map 0..101 (but some region is font data)
-    ; so 8kiB reserved for map ($4000..$5FFF) is then Y: 0..50 (font at $6000)
-    ; 12kiB reserved for map ($4000..$6FFF) is Y: 0..75 range (font at $7000)
+    ; so if 8kiB reserved for map ($4000..$5FFF) then Y: 0..50 (font at $6000)
+    ; if 12kiB reserved for map ($4000..$6FFF) then Y: 0..75 range (font at $7000)
     ; the particular line address in map is: $4000 + tilemapY * 160
-skipScanlines       BYTE    0   ; number of scanlines to skip (with tilemode off)
 xOffset             BYTE    0   ; tile number to start line at (wraps around) 0..79 only!
     ENDS
 
@@ -294,7 +294,9 @@ GetInvisibleScanlines_byIX:
 
 CopperReinit:
         ; Input:
-        ;       IX = pointer to SDisplayMap array (terminating item has `rows == 0`)
+        ;       IX = pointer to SDisplayMap array (terminating item has `skipScanlines == -1`)
+        ;           The array can't contain just the terminating block,
+        ;           there must be at least one row visible
         ; Output:
         ;       Copper is reprogrammed and started (in %01 mode, wrap-around infinite run)
         ; Uses:
@@ -346,17 +348,16 @@ CopperReinit:
                 ld      de,SDisplayMap
                 add     ix,de           ; ++displayMapPtr
 .DisplayMapLoopEntry:
-                ld      a,(ix + SDisplayMap.rows)
-                or      a
-                ret     z
                 ;; create "skip scanlines" in copper code (switch OFF + ON tilemode)
                 ld      a,(ix + SDisplayMap.skipScanlines)
                 or      a
                 jr      z,.noSkipScanline
+                add     a,l
+                ld      l,a             ; Wline += skipLines
+                ret     c               ; 256 <= scanline, gone offscreen or hit terminator item
                 ld      de,$6B          ; E = TILEMAP_CONTROL_NR_6B, D = 0
                 out     (c),e
                 out     (c),d           ; switch OFF tilemap
-                add     hl,a            ; Wline += skipLines
                 out     (c),h           ; WAIT
                 out     (c),l
 .noSkipScanline:
@@ -409,13 +410,13 @@ CopperReinit:
                 add     hl,a
                 out     (c),h           ; WAIT
                 out     (c),l
+                bit     0,h
+                ret     nz              ; 256 <= scanline, gone offscreen
                 ; ++tilemapY and set CF in "F'" when base address needs update
                 ld      a,8
                 add     a,e
                 ld      e,a
                 ex      af,af'          ; A = rows counter (and preserve CF indicator)
-                bit     0,h
-                ret     nz              ; 256 <= scanline, gone outside of screen
                 dec     a
                 jp      nz,.Row6pxLoop
                 jp      .DisplayMapLoop
