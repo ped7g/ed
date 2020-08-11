@@ -239,7 +239,7 @@ MainLoop:
                 jr      z,100F  ; no reinit needed
                 call    video.SetCopperIsInitialized
                 call    video.GetInvisibleScanlines_byMode
-                ld      de,.debugSDisMap
+                ld      ix,.debugSDisMap
                 call    video.CopperReinit
                 jr      100F
 .debugSDisMap:

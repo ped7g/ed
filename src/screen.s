@@ -20,6 +20,8 @@
 ;; AdvancePos                   - advance BC coordinates to next position in virtual map
 ;;----------------------------------------------------------------------------------------
 
+    DEFINE DBG_COPPER_REINIT_PERFORMANCE
+
     ; include the displayedge runtime library - FIXME migrate to displayedge_rt
 ;     DEFINE USE_TO_READ_NEXT_REG ReadNextReg
 ;     INCLUDE "displayedge_rt.i.asm"
@@ -145,9 +147,24 @@ InitVideo:
                 nextreg $1B,159
                 nextreg $1B,0
                 nextreg $1B,255
+                nextreg $4A,$04                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = dark green
                 ; make sure the need of copper init is signalled
                 ld      a,video.MODE_COUNT
                 ld      (video.CopperNeedsReinit.CurrentMode),a
+
+        IFDEF DBG_COPPER_REINIT_PERFORMANCE
+                ; fill copper with soft-reset to verify the filler works correctly
+                    nextreg $61,0
+                    nextreg $62,0               ; stop coppper + write index = 0
+                    ld      bc,1024/256
+.debugFillCopper:
+                    nextreg $63,$02
+                    nextreg $63,$01             ; soft-reset request
+                    djnz    .debugFillCopper
+                    dec     c
+                    jr      nz,.debugFillCopper
+        ENDIF
+
                 ret
 
 ;;----------------------------------------------------------------------------------------
@@ -277,16 +294,22 @@ GetInvisibleScanlines_byIX:
 
 CopperReinit:
         ; Input:
-        ;       DE = pointer to SDisplayMap array (terminating item has `rows == 0`)
+        ;       IX = pointer to SDisplayMap array (terminating item has `rows == 0`)
         ; Output:
         ;       Copper is reprogrammed and started (in %01 mode, wrap-around infinite run)
         ; Uses:
         ;       AF, BC, DE, HL, IX
         ;       side effect: selects NextReg $63 on I/O port
-                ; init the copper code generator variables
-                ld      hl,$8000 | (HORIZONTAL_COMPARE<<9)  ; copper WAIT scanline 0
-                ld      ix,de           ; ok ; IX = Display map array
-                ;; IX = SDisplayMap array, HL = W-line
+
+        IFDEF DBG_COPPER_REINIT_PERFORMANCE
+                    nextreg $4A,$02                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = blue (debug)
+                    ld      bc,4
+.debugDelay:
+                    nop : djnz .debugDelay
+                    dec     c
+                    jr      nz,.debugDelay
+                    nextreg $4A,$80                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = red (debug)
+        ENDIF
                 ; set up Copper control to "stop" + index 0
                 nextreg $62,0           ; COPPER_CONTROL_HI_NR_62 - STOP first (should not matter)
                 nextreg $61,0           ; COPPER_CONTROL_LO_NR_61
@@ -295,7 +318,11 @@ CopperReinit:
                 ld      a,$63           ; COPPER_DATA_16B_NR_63
                 out     (c),a           ; select copper data register
                 inc     b               ; BC = TBBLUE_REGISTER_ACCESS_P_253B
-                ;; IX = SDisplayMap array, HL = W-line, BC = $253B I/O port
+                ld      hl,$8000        ; copper WAIT scanline 0, h=0
+                out     (c),h           ; WAIT for beginning of line to give generator
+                out     (c),l           ; at least half of scanline head-start
+                ld      h,high($8000 | (HORIZONTAL_COMPARE<<9)) ; copper WAIT scanline 0, H=39
+                ;; IX = SDisplayMap array, HL = WAIT_line, BC = $253B I/O port
                 out     (c),h           ; initial WAIT
                 out     (c),l
                 ; start copper before the full code is generated to maximize chance
@@ -306,6 +333,9 @@ CopperReinit:
                 ld      de,$6B          ; E = TILEMAP_CONTROL_NR_6B, D = 0
                 out     (c),e
                 out     (c),d           ; switch OFF tilemap
+        IFDEF DBG_COPPER_REINIT_PERFORMANCE
+                    nextreg $4A,$90                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = yellow (debug)
+        ENDIF
                 ; fill up remaining copper code with NOOPs - calculate amount of NOOPs
                 ld      a,$62           ; COPPER_CONTROL_HI_NR_62
                 call    ReadNextReg     ; read it for calculating count + starting copper
@@ -315,25 +345,26 @@ CopperReinit:
                 ld      e,a             ; DE = current copper index (11 bit value 0..2047 + copper mode)
                 ld      b,3
                 bsrl    de,b            ; E = current copper index>>3 (8bit 0..255)
-                or      %1111'1000
-                ld      d,a             ; D = low 3 bits of copper index, top bits set (-8..-1 value)
+                ld      hl,.NoopFillLoop
+                and     %0000'0111
+                add     a,a             ; low 3 bits of copper index * 2 (0, 2, ..., 14)
+                add     hl,a            ; address into unrolled block of `out (c),a`
                 ; fill up remaining copper code with NOOPs - actual fill
                 ld      bc,$243B        ; TBBLUE_REGISTER_SELECT_P_243B
                 ld      a,$63           ; COPPER_DATA_16B_NR_63
                 out     (c),a           ; select copper data register
                 inc     b               ; BC = TBBLUE_REGISTER_ACCESS_P_253B
                 xor     a
-                ; align the 3-bit small value
-.NoopFillLoop:  out     (c),a
-                inc     d
-                jp      nz,.NoopFillLoop
+                ; align the 3-bit small value (jump at remaining unrolled outs to align to 8x)
+                jp      hl
                 ; burst the rest in 8x unrolled outs
-                jp      .NoopFillLoop2Entry ; do `inc e` first
-.NoopFillLoop2: .8 out (c),a            ; unroll for better performance
-.NoopFillLoop2Entry:
+.NoopFillLoop: .8 out (c),a            ; unroll for better performance
                 inc     e
-                jp      nz,.NoopFillLoop2
+                jp      nz,.NoopFillLoop
 ;     nextreg $62,%01'000'000 ; FIXME test CSPECT
+        IFDEF DBG_COPPER_REINIT_PERFORMANCE
+                    nextreg $4A,$04                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = green (debug)
+        ENDIF
                 ret
 
 .DisplayMapLoop:
@@ -368,12 +399,15 @@ CopperReinit:
                 out     (c),a           ; TILEMAP_XOFFSET_LSB_NR_30 = low xOffset*8
                 out     (c),e
                 ;; read config: tilemapY, rows
-                ld      a,(ix + SDisplayMap.rows)
                 ld      e,(ix + SDisplayMap.tilemapY)
                 ld      d,8
                 mul     de              ; DE = tilemapY*8
-                ;; IX = SDisplayMap, HL = W-line, BC = $253B I/O port, DE = tilemapY*8, A = rows
+                ld      a,e
+                sub     l               ; A = low(tilemapY*8 - scanline)
+                ex      af,af'
+                ld      a,(ix + SDisplayMap.rows)
 .Row6pxLoop:
+                ;; IX = SDisplayMap, HL = W-line, BC = $253B I/O port, DE = tilemapY*8, A = rows, A' = low(tilemapY*8 - scanline)
                 ; set up base address of tilemap = (tilemapY/32 * (high 32*160))
                 push    de              ; D = tilemapY/32 (because DE = tilemapY*8)
                 ld      e,high (32*160)
@@ -381,17 +415,16 @@ CopperReinit:
                 ld      d,$6E           ; TILEMAP_BASE_ADR_NR_6E
                 out     (c),d
                 out     (c),e
-                pop     de
-                ; calculate y offset = tilemapY*8 - scanline
-                push    de
-                ex      de,hl
-                sub     hl,de           ; ok
-                ex      de,hl
+                ; set y offset = tilemapY*8 - scanline
                 ld      d,$31           ; TILEMAP_YOFFSET_NR_31 = yOfs
                 out     (c),d
-                out     (c),e
-                pop     de
+                ex      af,af'
+                out     (c),a
+                ; low(tilemapY*8 - scanline) += 2
+                add     a,2
+                ex      af,af'
                 ; ++tilemapY
+                pop     de
                 add     de,8
                 ; scanline += 6
                 add     hl,6
