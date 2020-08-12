@@ -7,10 +7,10 @@
 ;;
 ;;----------------------------------------------------------------------------------------------------------------------
 
-                org     $8000
-
+                ALIGN 256
 Im2Vectors:
-                ds      257,$81         ; Interrupt vector table
+ImRoutineHigh   equ     high(Im2Vectors)+1
+                ds      257,ImRoutineHigh       ; Interrupt vector table
 
 BUFFERPAGE      equ     $be
 
@@ -68,7 +68,7 @@ DoneKeys:       di
 ;   B0-B9 - Ext+Number
 ;   E1-FA - Ext+Letter
 
-                org     $8181
+                org     (ImRoutineHigh<<8) | ImRoutineHigh
 
 ImRoutine:
                 di

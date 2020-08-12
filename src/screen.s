@@ -2,13 +2,11 @@
 ;; Video-mode low level routines, initializing tilemode and copper, printing single char
 ;;----------------------------------------------------------------------------------------
 ;; # List of functions:
-;; InitVideo                    - set up tilemode 80x42 (except copper), 28MHz, ...
+;; InitVideo                    - set up tilemode 80x42 (except copper), ...
 ;;      - also shifts scanline "0" 33 lines up (just one line above the 640x256 area)
-;; DetectMode                   - returns video.MODE_* value (current display mode)
 ;; CopperNeedsReinit            - ZF=0 when copper needs reinit (mode change detected)
-;; GetModeConfigData            - converts video.MODE_* value to address of mode data
-;; GetInvisibleScanlines_byMode - get current mode limits
-;; GetInvisibleScanlines_byIX   - get current mode limits
+;; SetCopperIsInitialized       - clears the "needs reinit" flag
+;; GetModeData                  - gets config data by dspedge.MODE_* value
 ;; CopperReinit                 - generate copper code (when map-config or mode changes)
 ;; ClearScreen                  - sets whole virtual map ($4000..font) to ' ' in color 0
 ;; SetFullTilemapPalette        - (internal) setup tilemode palette
@@ -23,8 +21,8 @@
 ;     DEFINE DBG_COPPER_REINIT_PERFORMANCE
 
     ; include the displayedge runtime library - FIXME migrate to displayedge_rt
-;     DEFINE USE_TO_READ_NEXT_REG ReadNextReg
-;     INCLUDE "displayedge_rt.i.asm"
+    DEFINE USE_TO_READ_NEXT_REG ReadNextReg
+    INCLUDE "displayedge_rt.i.asm"
 
     ; default values for configuration-defines
     IFNDEF VIDEO_FONT_ADR
@@ -49,6 +47,9 @@ FONT_ADR            EQU VIDEO_FONT_ADR          ; convert DEFINE to regular symb
 
 VIRTUAL_ROWS        EQU (FONT_ADR - $4000)/160  ; 51 for font=$6000, 76 for $7000
 
+; array to parse displayedge config data into:
+DisplayMarginsArr:  DS      dspedge.S_MARGINS * dspedge.MODE_COUNT  ; 4 * 9 = 36
+
     STRUCT SDisplayMap
 ; Account for the current "fully visible text rows" from GetInvisibleScanlines_*, creating
 ; layout which fits on screen (if the layout is higher, the generator should survive it,
@@ -67,42 +68,6 @@ xOffset             BYTE    0   ; tile number to start line at (wraps around) 0.
 
 HORIZONTAL_COMPARE  EQU         39  ; after the right border is finished in all modes
 
-MODE_HDMI_50        EQU         0
-MODE_ZX48_50        EQU         1
-MODE_ZX128_50       EQU         2
-MODE_PENTAGON_50    EQU         3
-MODE_HDMI_60        EQU         4
-MODE_ZX48_60        EQU         5
-MODE_ZX128_60       EQU         6
-MODE_PENTAGON_60    EQU         7   ; the board will generate identical signal as Pentagon 50Hz (!)
-MODE_COUNT          EQU         8
-
-    STRUCT SDisplayCfg
-modeNumber          BYTE            ; to have it accessible even if input argument is just IX pointer
-startScanline       WORD            ; 33 scanlines ahead of pixel area (in HDMI 60Hz way into blank area)
-invisibleTop        BYTE        0   ; how many top lines are in invisible range
-invisibleBottom     BYTE        0   ; how many bottom lines are in invisible range
-    ENDS
-
-;; core 2.00 scanlines table (needs refresh for 60Hz modes and core 3.0, it's different)
-; hdmi 50 | hdmi 60 | zx48 50 | zx48 60 | zx128 50 | zx128 60 | pentagon
-; 272-311 | 245-261 | 263-311 | 239-261 | 263-310  | 239-260  | 255-319  ; top border (visible)
-;  0   40 | 15   17 |  0   49 |  9   23 |  0   48  | 10   22  |  0   64  ; top tilemode invisible/visible
-;  0   40 | 12   20 |  0   57 |  0   33 |  0   57  |  0   33  |  0   49  ; bottom scanlines invisible/visible
-;     279 |     229 |     279 |     229 |     278  |     228  |     287  ; line at -33 (ahead of first tilemode line)
-
-DisplayCfgTab:
-.hdmi_50            SDisplayCfg MODE_HDMI_50,       279             ; => 42 rows +4px
-.zx48_50            SDisplayCfg MODE_ZX48_50,       279
-.zx128_50           SDisplayCfg MODE_ZX128_50,      278
-.pentagon           SDisplayCfg MODE_PENTAGON_50,   287
-; FIXME - refresh 60Hz mode configurations for core 3.0
-.hdmi_60            SDisplayCfg MODE_HDMI_60,       229, 15, 12     ; => 38 rows +1px
-.zx48_60            SDisplayCfg MODE_ZX48_60,       229,  9         ; => 41 rows +1px
-.zx128_60           SDisplayCfg MODE_ZX128_60,      228, 10         ; => 41 rows +0px
-.pentagon2          SDisplayCfg MODE_PENTAGON_60,   287             ; has identical signal as 50Hz
-.invalid            SDisplayCfg MODE_COUNT,         229,  9
-
 ;;----------------------------------------------------------------------------------------
 ;; Init all video related settings to default state for 80x42 tilemode (has to be called
 ;; at least once before the app will enter main loop).
@@ -111,13 +76,12 @@ DisplayCfgTab:
 ;;
 ;; Settings:
 ;;   Shifts scanline "0" 33 lines up (just one line above the 640x256 area)
-;;   28MHz turbo selected, black border, ULA disabled, keys F8+F3+Multiface enabled
+;;   black border, ULA disabled, keys F8+F3+Multiface enabled
 ;;   4bit tilemode 80x32 with attribute bytes, tiles base to video.FONT_ADR
 ;;   resets tilemode clip window (to full 640x256), sets palette
 ;;   clears tilemap (from $4000 to video.FONT_ADR)
 
 InitVideo:
-                nextreg $07,3                   ; Set speed to 28Mhz
                 xor     a
                 out     (254),a                 ; black border
 
@@ -149,7 +113,7 @@ InitVideo:
                 nextreg $1B,255
                 nextreg $4A,$08                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = green
                 ; make sure the need of copper init is signalled
-                ld      a,video.MODE_COUNT
+                ld      a,dspedge.MODE_COUNT
                 ld      (video.CopperNeedsReinit.CurrentMode),a
 
         IFDEF DBG_COPPER_REINIT_PERFORMANCE
@@ -168,126 +132,73 @@ InitVideo:
                 ret
 
 ;;----------------------------------------------------------------------------------------
-;FIXME - rather sync with displayedge variant
-;; Detect current video mode:
-;; 0, 1, 2, 3 = HDMI, ZX48, ZX128, Pentagon (all 50Hz), add +4 for 60Hz modes
-;; (Pentagon 60Hz is reported as Pentagon 50Hz => value 7 shouldn't be returned in A)
-;; (because FPGA does ignore the 50/60Hz bit and will produce the Pentagon ~49Hz signal)
-
-DetectMode:
-        ; Output:
-        ;       A = current mode 0..6
-        ; Uses:
-        ;       B, side effect: selects NextReg $11 or $03 on I/O port
-
-                ;; read current configuration from NextRegs and convert it to 0..6 value
-                ; read 50Hz/60Hz info
-                ld      a,$05 ; PERIPHERAL_1_NR_05
-                call    ReadNextReg
-                and     $04             ; bit 2 = 50Hz/60Hz configuration
-                ld      b,a             ; remember the 50/60 as +0/+4 value in B
-                ; read HDMI vs VGA info
-                ld      a,$11 ; VIDEO_TIMING_NR_11
-                call    ReadNextReg
-                inc     a               ; HDMI is value %111 in bits 2-0 -> zero it
-                and     $07
-                jr      z,.hdmiDetected
-                ; if VGA mode, read particular zx48/zx128/pentagon setting
-                ld      a,$03
-                call    ReadNextReg
-                ; a = bits 6-4: %00x zx48, %01x zx128, %100 pentagon
-                swapnib a
-                rra
-                inc     a
-                and     $03             ; A = 1/2/3 for zx48/zx128/pentagon
-.hdmiDetected:  add     a,b             ; add 50/60Hz value to final result
-                ret
-
-;;----------------------------------------------------------------------------------------
 ;; Detect current video mode, and check if the copper code has to be reprogrammed
 
 CopperNeedsReinit:
         ; Output:
-        ;       A = current mode 0..6
-        ;       B = copper-code mode (0..7) (7 = no copper yet)
+        ;       A = current mode 0..dspedge.MODE_COUNT-1
+        ;       B = copper-code mode (0..dspedge.MODE_COUNT) (dspedge.MODE_COUNT = no copper yet)
         ;       ZF=0 => copper needs reprogramming (ZF=1 copper code is valid)
         ; Uses:
         ;       side effect: selects NextReg $11 or $03 on I/O port
 
-                call    DetectMode
+                call    dspedge.DetectMode
                 ;; compare with previously stored value (by copper code generator)
 .CurrentMode = $+1                      ; self-modify code used as value storage
-                ld      b,MODE_COUNT    ; last copper code programmed for mode X
+                ld      b,dspedge.MODE_COUNT    ; last copper code programmed for mode X
                 cp      b               ; set ZF (ZF=1 => copper code is still valid)
                 ret
 
-;FIXME add docs
+;;----------------------------------------------------------------------------------------
+;; Clears the "needs reinit" flag (when code knows it will reinitialize layout)
+
 SetCopperIsInitialized:
         ; Input:
-        ;       A = mode number for which copper is initialized (0..6 like in DetectMode)
+        ;       A = mode number for which copper is initialized (like in dspedge.DetectMode)
                 ld      (CopperNeedsReinit.CurrentMode),a
                 ret
 
 ;;----------------------------------------------------------------------------------------
-;; Set IX to point to the mode-config data
-
-GetModeConfigData:
-        ; Input:
-        ;       A = mode number (0..6 like in DetectMode)
-        ; Output:
-        ;       IX = pointer to SDisplayCfg structure
-        ;       A = if (valid) original-value else MODE_COUNT
-
-                cp      MODE_COUNT
-                jr      c,.validMode
-                ld      a,MODE_COUNT    ; clamp the value and return IX=DisplayCfgTab.invalid
-.validMode:     ld      ix,DisplayCfgTab
-                push    de
-                ld      e,a
-                ld      d,SDisplayCfg
-                mul     de
-                add     ix,de
-                pop     de
-                ret
-
+;;FIXME docs! Set IX to point to the mode-config data
 ;;----------------------------------------------------------------------------------------
 ;; Get "invisible" (outside of screen) top/bottom scanlines for desired video mode.
 ;; You should always skip at least this many when configuring new screen-layout.
 ;; (configuring it with 0 to skip will not crash or anything, but some tile rows will
 ;; be not displayed)
 
-GetInvisibleScanlines_byMode:
+GetModeData:
         ; Input:
-        ;       A = mode to read values for (0..6 like in DetectMode)
+        ;       A = mode number (like in dspedge.DetectMode)
         ; Output:
-        ;       D = invisible top lines
-        ;       E = invisible bottom lines
-        ;       B = fully visible text rows (6px)
-        ;       A = remaining visible scanlines after last full row (0..5)
-        ;       IX = pointer to SDisplayCfg structure
-
-                call    GetModeConfigData
-
-GetInvisibleScanlines_byIX:
-        ; Input:
-        ;       IX = pointer to SDisplayCfg structure
-        ; Output:
-        ;       D = invisible top lines
-        ;       E = invisible bottom lines
+        ;       HLDE = L/R/T/B user defined margins (sanitized to 0..31 even if not found in cfg file)
         ;       B = fully visible text rows (6px)
         ;       A = remaining visible scanlines after last full row (0..5)
 
-                ld      d,(ix+SDisplayCfg.invisibleTop)
-                ld      e,(ix+SDisplayCfg.invisibleBottom)
-                ; calculate fully visible 6px heigh tile-rows (258px = 43 rows)
+                ld      de,DisplayMarginsArr
+                call    dspedge.GetMargins      ; returns BCDE = L/R/T/B (255 for undefined)
+            ; sanitize margins returned by displayedge to 0..31 range and redirect L/R from BC to HL
+                ld      a,b
+                call    dspedge.SanitizeMarginValue
+                ld      h,a
+                ld      a,c
+                call    dspedge.SanitizeMarginValue
+                ld      l,a
+                ld      a,d
+                call    dspedge.SanitizeMarginValue
+                ld      d,a
+                ld      a,e
+                call    dspedge.SanitizeMarginValue
+                ld      e,a
+            ; calculate fully visible 6px heigh tile-rows (258px = 43 rows)
                 ld      b,42            ; fully visible rows init (-1 already done)
                 ld      a,-2            ; 640x256 tile-mode has 2px invisible (42.66 rows)
-                sub d : sub e           ; A = -(total invisible scanlines)
+                sub d
+                sub e                   ; A = -(total invisible scanlines)
 .calcVisibleRows:
                 add     a,6
                 ret     c               ; B = full 6px rows, A = extra scanlines
                 djnz    .calcVisibleRows
-                ; can't reach this point ever
+            ; can't reach this point ever
 
 ;;----------------------------------------------------------------------------------------
 ;; Re-programs the Copper for current video mode with new display-map configuration

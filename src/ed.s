@@ -72,7 +72,9 @@ textlen equ PC - $c000
 
 
 ;;----------------------------------------------------------------------------------------------------------------------
-;; This ORGs at $7fff
+
+        org     $8000
+ParsingBuffer:          DS      256     ; 256B buffer for parsing displayedge.cfg file, aligned ($xx00)
 
         include "keyboard.s"
 
@@ -97,6 +99,18 @@ Start:
 ;; Initialise the screen and video modes
 
 Initialise:
+                nextreg $07,3                   ; Set speed to 28Mhz
+
+            ;; display edge init
+                ; read default /sys/env.cfg file
+                ld      hl,dspedge.defaultCfgFileName
+                ld      de,video.DisplayMarginsArr
+                ld      bc,ParsingBuffer
+                call    dspedge.ParseCfgFile    ; set array to -1 values even when error happens
+;                 jr      c,.someEsxError         ; A = esx error number
+; .someEsxError:
+
+            ;; video init (tilemode 80x32 HW, 80x42 SW)
                 call    video.InitVideo
                 ret
 
@@ -161,12 +175,12 @@ MainLoop:
                 out     (254),a
                 call    video.CopperNeedsReinit
                 jr      z,.videoConfigIsOk
-                call    video.GetInvisibleScanlines_byMode
-        ;       D = invisible top lines
-        ;       E = invisible top lines
-        ;       B = fully visible 6px heigh rows
+                call    video.SetCopperIsInitialized
+                call    video.GetModeData
+        ;       HLDE = L/R/T/B user defined margins (sanitized to 0..31 even if not found in cfg file)
+        ;       B = fully visible text rows (6px)
         ;       A = remaining visible scanlines after last full row (0..5)
-        ;       IX = pointer to ModeCfg structure
+                ; TODO - do something meaningful with it
 
 .videoConfigIsOk:
                 halt
@@ -238,14 +252,23 @@ MainLoop:
                 ld      (.map3.xOffset),a
                 ; force re-init any way
 ;                 and     (1<<3)-1 : jr nz,100F     ; every n-th frame only
-                ld      a,video.MODE_COUNT
+                ld      a,dspedge.MODE_COUNT
                 ld      (video.CopperNeedsReinit.CurrentMode),a
 ;                jr      100F
                 call    video.CopperNeedsReinit
                 jr      z,100F  ; no reinit needed
                 call    video.SetCopperIsInitialized
-                call    video.GetInvisibleScanlines_byMode
+                call    video.GetModeData
+        ;       HLDE = L/R/T/B user defined margins (sanitized to 0..31 even if not found in cfg file)
+        ;       B = fully visible text rows (6px)
+        ;       A = remaining visible scanlines after last full row (0..5)
                 ld      ix,.debugSDisMap
+                ld      (ix+video.SDisplayMap.skipScanlines),d    ; (first item).skipScanlines = margin at top
+                ld      a,b
+                sub     30
+                ld      (ix+video.SDisplayMap*1+video.SDisplayMap.rows),a
+                ; TODO do something interesting with the rest of the info
+
                 call    video.CopperReinit
                 jr      100F
 .debugSDisMap:
@@ -273,12 +296,12 @@ MainLoop:
                 push    af
                 xor     a
 301:            push    af
-                call    video.GetInvisibleScanlines_byMode
+                call    video.GetModeData
                 ld      (DebugValue),a
                 call    DisplayDebugger
                 pop     af
                 inc     a
-                cp      video.MODE_COUNT+1
+                cp      dspedge.MODE_COUNT+1
                 jr      c,301B
                 pop     af
 
