@@ -100,6 +100,11 @@ Start:
 
 Initialise:
                 nextreg $07,3                   ; Set speed to 28Mhz
+            ; enable F8, F3 and Multiface
+                ld      a,$06
+                call    ReadNextReg
+                or      %1010'1000
+                nextreg $06,a
 
             ;; display edge init
                 ; read default /sys/env.cfg file
@@ -107,8 +112,7 @@ Initialise:
                 ld      de,video.DisplayMarginsArr
                 ld      bc,ParsingBuffer
                 call    dspedge.ParseCfgFile    ; set array to -1 values even when error happens
-;                 jr      c,.someEsxError         ; A = esx error number
-; .someEsxError:
+                ; just ignore esxdos errors if reading cfg file fails
 
             ;; video init (tilemode 80x32 HW, 80x42 SW)
                 call    video.InitVideo
@@ -176,6 +180,7 @@ MainLoop:
                 call    video.CopperNeedsReinit
                 jr      z,.videoConfigIsOk
                 call    video.SetCopperIsInitialized
+                ld      de,video.DisplayMarginsArr
                 call    video.GetModeData
         ;       HLDE = L/R/T/B user defined margins (sanitized to 0..31 even if not found in cfg file)
         ;       B = fully visible text rows (6px)
@@ -258,6 +263,7 @@ MainLoop:
                 call    video.CopperNeedsReinit
                 jr      z,100F  ; no reinit needed
                 call    video.SetCopperIsInitialized
+                ld      de,video.DisplayMarginsArr
                 call    video.GetModeData
         ;       HLDE = L/R/T/B user defined margins (sanitized to 0..31 even if not found in cfg file)
         ;       B = fully visible text rows (6px)
@@ -296,6 +302,7 @@ MainLoop:
                 push    af
                 xor     a
 301:            push    af
+                ld      de,video.DisplayMarginsArr
                 call    video.GetModeData
                 ld      (DebugValue),a
                 call    DisplayDebugger

@@ -20,7 +20,8 @@
 
 ;     DEFINE DBG_COPPER_REINIT_PERFORMANCE
 
-    ; include the displayedge runtime library - FIXME migrate to displayedge_rt
+    ; include the displayedge runtime library - used to detect video mode
+    ; and read user defined visible margins in particular mode
     DEFINE USE_TO_READ_NEXT_REG ReadNextReg
     INCLUDE "displayedge_rt.i.asm"
 
@@ -87,11 +88,6 @@ InitVideo:
 
                 call    SetFullTilemapPalette   ; setup tilemode palette
                 call    ClearScreen             ; reset the $4000..FONT_ADR region
-                ; enable F8, F3 and Multiface
-                ld      a,$06
-                call    ReadNextReg
-                or      %1010'1000
-                nextreg $06,a
                 ; shift scanline counters 33 lines up, so the "0" is the last line above
                 ; 640x256 mode (requires core 3.1.5+)
                 nextreg $64,33                  ; VIDEO_LINE_OFFSET_NR_64
@@ -114,7 +110,7 @@ InitVideo:
                 nextreg $4A,$08                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = green
                 ; make sure the need of copper init is signalled
                 ld      a,dspedge.MODE_COUNT
-                ld      (video.CopperNeedsReinit.CurrentMode),a
+                ld      (CopperNeedsReinit.CurrentMode),a
 
         IFDEF DBG_COPPER_REINIT_PERFORMANCE
                 ; fill copper with soft-reset to verify the filler works correctly
@@ -159,22 +155,17 @@ SetCopperIsInitialized:
                 ret
 
 ;;----------------------------------------------------------------------------------------
-;;FIXME docs! Set IX to point to the mode-config data
-;;----------------------------------------------------------------------------------------
-;; Get "invisible" (outside of screen) top/bottom scanlines for desired video mode.
-;; You should always skip at least this many when configuring new screen-layout.
-;; (configuring it with 0 to skip will not crash or anything, but some tile rows will
-;; be not displayed)
+;; Gets "invisible display margin" data configured by user (with `.displayedge` utility)
 
 GetModeData:
         ; Input:
         ;       A = mode number (like in dspedge.DetectMode)
+        ;       DE = displayedge runtime library array with parsed values from cfg file
         ; Output:
         ;       HLDE = L/R/T/B user defined margins (sanitized to 0..31 even if not found in cfg file)
         ;       B = fully visible text rows (6px)
         ;       A = remaining visible scanlines after last full row (0..5)
 
-                ld      de,DisplayMarginsArr
                 call    dspedge.GetMargins      ; returns BCDE = L/R/T/B (255 for undefined)
             ; sanitize margins returned by displayedge to 0..31 range and redirect L/R from BC to HL
                 ld      a,b
@@ -572,7 +563,7 @@ Print:
         ; Uses:
         ;       BC, HL, DE, A
 
-                call    video.CalcTileAddress
+                call    CalcTileAddress
                 swapnib
                 ld      c,a
                 jr      .loopEntry
@@ -594,7 +585,7 @@ PrintChar:
         ;       HL = Tilemap address of following position
         ; Uses:
         ;       A
-                call    video.CalcTileAddress
+                call    CalcTileAddress
                 ld      (hl),e
                 inc     l           ; only L: even -> odd value, can't overflow to H
                 ld      a,d
@@ -613,7 +604,7 @@ AdvancePos:
         ; Uses:
         ;       A
                 inc     c
-                ld      a,80
+                ld      a,80        ; TODO? `ld a,-80 : add a,c : ret nc` to normalize with invalid C over few calls
                 sub     c
                 ret     nz
                 ld      c,a
