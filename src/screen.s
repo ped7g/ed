@@ -7,7 +7,7 @@
 ;; CopperNeedsReinit            - ZF=0 when copper needs reinit (mode change detected)
 ;; SetCopperIsInitialized       - clears the "needs reinit" flag
 ;; GetModeData                  - gets config data by dspedge.MODE_* value
-;; CopperReinit                 - generate copper code (when map-config or mode changes)
+;; CopperReinit                 - generate copper code (when map-config changes)
 ;; ClearScreen                  - sets whole virtual map ($4000..font) to ' ' in color 0
 ;; SetFullTilemapPalette        - (internal) setup tilemode palette
 ;; CalcTileAddress              - memory address of particular single character
@@ -17,6 +17,11 @@
 ;; PrintChar                    - print single character
 ;; AdvancePos                   - advance BC coordinates to next position in virtual map
 ;;----------------------------------------------------------------------------------------
+
+screen.s.code_size      EQU     $
+
+    ; switch sjasmplus to correct syntax variant
+    OPT push reset --zxnext --syntax=abfw
 
 ;     DEFINE DBG_COPPER_REINIT_PERFORMANCE
 
@@ -32,32 +37,20 @@
         ; make sure all tiles fit into the Bank5 region (i.e. $7000 max for 128 tiles)
     ENDIF
 
-    MACRO negR16toR16 fromR16?, toR16?
-        ; 6B 24T, uses A
-        xor     a
-        sub     low fromR16?
-        ld      low toR16?,a    ; low = 0 - low
-        sbc     a,a
-        sub     high fromR16?
-        ld      high toR16?,a   ; high = 0 - high - borrow
-    ENDM
+    MODULE tile8x6
 
-    MODULE video
+;;----------------------------------------------------------------------------------------
+;; Structure to define new "display map" data (what is displayed where), for CopperReinit.
+;; Use array of these with the last one having skipScanlines set to -1 to work
+;; as list-terminator item (or DB -1 after the list has same effect).
+;; Account for the current "fully visible text rows" from GetModeData, creating layout
+;; which fits on screen (if the layout is higher, the generator should survive it, but it
+;; isn't recommended situation, the layout should be valid for current video mode).
+;; You must skip the reported invisible lines yourself by adding them to "skipScanlines".
+;; The xOffset must be valid 0..79 value only, otherwise illegal values will be sent to
+;; NextReg $2F (will work on core 3.0 as expected, but may stop working in newer cores).
 
-FONT_ADR            EQU VIDEO_FONT_ADR          ; convert DEFINE to regular symbol
-
-VIRTUAL_ROWS        EQU (FONT_ADR - $4000)/160  ; 51 for font=$6000, 76 for $7000
-
-; array to parse displayedge config data into:
-DisplayMarginsArr:  DS      dspedge.S_MARGINS * dspedge.MODE_COUNT  ; 4 * 9 = 36
-
-    STRUCT SDisplayMap
-; Account for the current "fully visible text rows" from GetInvisibleScanlines_*, creating
-; layout which fits on screen (if the layout is higher, the generator should survive it,
-; but it isn't recommended situation, the layout should be valid for current video mode).
-; You must skip the reported invisible lines yourself by adding them to "skipScanlines".
-; the xOffset must be valid 0..79 value only, otherwise illegal values will be sent to
-; NextReg $2F (will work on core 3.0 as expected, but may stop working in newer cores).
+        STRUCT SDisplayMap
 skipScanlines       BYTE    0   ; number of scanlines to skip (with tilemode off), -1 to end list
 rows                BYTE    0   ; number of rows (1..43)
 tilemapY            BYTE    0   ; map 0..101 (but some region is font data)
@@ -65,9 +58,26 @@ tilemapY            BYTE    0   ; map 0..101 (but some region is font data)
     ; if 12kiB reserved for map ($4000..$6FFF) then Y: 0..75 range (font at $7000)
     ; the particular line address in map is: $4000 + tilemapY * 160
 xOffset             BYTE    0   ; tile number to start line at (wraps around) 0..79 only!
-    ENDS
+        ENDS
 
-HORIZONTAL_COMPARE  EQU         39  ; after the right border is finished in all modes
+;;----------------------------------------------------------------------------------------
+;; possible "colours" for PrintChar and similar (palette slots):
+;; 0 - white on black                1 - black on white (inverse 0)
+;; 2 - bright white on black         3 - black on bright white (inverse 2)
+;; 4 - light blue on black           5 - light green on black
+;; 6 - light cyan on black           7 - light yellow on black
+;; 8 - white on blue (+8 sel)        9 - bright white on red (cursor)
+;; A - bright white on blue (+8 sel) B - white on dark grey (non-inverse menu/status/etc)
+;; C - light blue on blue (+8 sel)   D - light green on blue (+8 sel)
+;; E - light cyan on blue (+8 sel)   F - light yellow on blue (+8 sel)
+
+;;----------------------------------------------------------------------------------------
+FONT_ADR            EQU     VIDEO_FONT_ADR          ; convert DEFINE to regular symbol
+VIRTUAL_ROWS        EQU     (FONT_ADR - $4000)/160  ; 51 for font=$6000, 76 for $7000
+HORIZONTAL_COMPARE  EQU     39  ; after the right border is finished in all modes
+
+; array to parse displayedge config data into:
+DisplayMarginsArr:  DS      dspedge.S_MARGINS * dspedge.MODE_COUNT  ; 4 * 9 = 36
 
 ;;----------------------------------------------------------------------------------------
 ;; Init all video related settings to default state for 80x42 tilemode (has to be called
@@ -76,30 +86,27 @@ HORIZONTAL_COMPARE  EQU         39  ; after the right border is finished in all 
 ;; by CopperNeedsReinit or by change in layout done by app itself.
 ;;
 ;; Settings:
+;;   ULA disabled (so the "border" and areas between text will become transparency fallback)
 ;;   Shifts scanline "0" 33 lines up (just one line above the 640x256 area)
-;;   black border, ULA disabled, keys F8+F3+Multiface enabled
-;;   4bit tilemode 80x32 with attribute bytes, tiles base to video.FONT_ADR
+;;   4bit tilemode 80x32 with attribute bytes, tiles base to tile8x6.FONT_ADR
 ;;   resets tilemode clip window (to full 640x256), sets palette
-;;   clears tilemap (from $4000 to video.FONT_ADR)
+;;   clears tilemap (from $4000 to tile8x6.FONT_ADR)
 
 InitVideo:
-                xor     a
-                out     (254),a                 ; black border
-
                 call    SetFullTilemapPalette   ; setup tilemode palette
                 call    ClearScreen             ; reset the $4000..FONT_ADR region
                 ; shift scanline counters 33 lines up, so the "0" is the last line above
                 ; 640x256 mode (requires core 3.1.5+)
                 nextreg $64,33                  ; VIDEO_LINE_OFFSET_NR_64
                 ; set other NextRegs to default settings of 80x42 tilemode component
-                nextreg $6b,%11000001           ; Tilemap control
-                    ;*; +enable+80col-noAttr-palNum-textMode-r-512tile+forceTmOverUla
+                nextreg $6B,%11000001           ; Tilemap control
+                    ;= +enable +80col -noAttr -palNum -textMode .r -512tile +forceTmOverUla
                 ; $6E (TILEMAP_BASE_ADR_NR_6E) is not set up, because copper code does it
                 ; The "tilemapY" value in config is like 0..101, into map starting @ $4000
                 ; But the tiles def (font) resides after map, cutting down available space
                 ; ("tilemapY" can be 0..76 for font at $7000 and 0..51 for font at $6000)
-                nextreg $6f,high FONT_ADR       ; Tiles base offset
-                nextreg $4c,$0f                 ; Transparency colour (last item)
+                nextreg $6F,high FONT_ADR       ; Tiles base offset
+                nextreg $4C,$0f                 ; Transparency colour (last item)
                 nextreg $68,%10000000           ; Disable ULA output
                     ;*; +disableUla-blending-r-r-r-r-r-stencil
                 nextreg $1C,$08                 ; reset tilemap clip window index to 0
@@ -107,7 +114,6 @@ InitVideo:
                 nextreg $1B,159
                 nextreg $1B,0
                 nextreg $1B,255
-                nextreg $4A,$08                 ; TRANSPARENCY_FALLBACK_COL_NR_4A = green
                 ; make sure the need of copper init is signalled
                 ld      a,dspedge.MODE_COUNT
                 ld      (CopperNeedsReinit.CurrentMode),a
@@ -129,6 +135,10 @@ InitVideo:
 
 ;;----------------------------------------------------------------------------------------
 ;; Detect current video mode, and check if the copper code has to be reprogrammed
+;; The copper code itself is technically compatible with any video mode without any
+;; change (since the use of videoline offset $64 register), but the user may have
+;; different margins for different modes, so it may be worth to adjust the display-map
+;; configuration and init the copper.
 
 CopperNeedsReinit:
         ; Output:
@@ -192,7 +202,7 @@ GetModeData:
             ; can't reach this point ever
 
 ;;----------------------------------------------------------------------------------------
-;; Re-programs the Copper for current video mode with new display-map configuration
+;; Re-programs the Copper for the new display-map configuration
 
 CopperReinit:
         ; Input:
@@ -324,17 +334,16 @@ CopperReinit:
                 jp      .DisplayMapLoop
 
 ;;----------------------------------------------------------------------------------------
-;; Clear screen (write spaces in colour 0 everywhere in $4000..video.FONT_ADR region)
+;; Clear screen (write spaces in colour 0 everywhere in $4000..tile8x6.FONT_ADR region)
 
 ClearScreen:
         ; Uses:
-        ;       BC, HL, A
+        ;       BC, HL
                 push    de
                 ld      bc,FONT_ADR-$4002
+                ld      de,$4002
                 ld      hl,$4001
-                ld      de,hl               ; fake de = hl
-                inc     de                  ; de = $4002
-                ldd     (hl),0              ; fake [hl--] = 0
+                ldd     (hl),0          ; fake [hl--] = 0
                 ld      (hl),' '
                 ldir
                 pop     de
@@ -547,9 +556,6 @@ WriteSpace:
                 ret
 
 ;;----------------------------------------------------------------------------------------
-;; Utilities
-
-;;----------------------------------------------------------------------------------------
 ;; Low-level printing
 
 Print:
@@ -595,7 +601,7 @@ PrintChar:
 
 AdvancePos:
         ; Advances position to next position on screen. This will wrap to next line.
-        ; When at the last row of virtual map (depends on video.FONT_ADR), wraps to Y=0
+        ; When at the last row of virtual map (depends on tile8x6.FONT_ADR), wraps to Y=0
         ; Input:
         ;       B = Y coord (0-?) (0..50 font=$6000, 0..75 font=$7000)
         ;       C = X coord (0-79)
@@ -603,18 +609,22 @@ AdvancePos:
         ;       BC = next position XY.
         ; Uses:
         ;       A
-                inc     c
-                ld      a,80        ; TODO? `ld a,-80 : add a,c : ret nc` to normalize with invalid C over few calls
-                sub     c
-                ret     nz
-                ld      c,a
-                inc     b
-                ld      a,VIRTUAL_ROWS
-                sub     b
-                ret     nz
-                ld      b,a
+                inc     c           ; ++X
+                ld      a,-80
+                add     a,c
+                ret     nc          ; C is 0..79
+                ld      c,a         ; C = 0 (if it was 80)
+                inc     b           ; ++Y
+                ld      a,-VIRTUAL_ROWS
+                add     a,b
+                ret     nc          ; B is 0..(VIRTUAL_ROWS-1)
+                ld      b,a         ; B = 0 (if it was VIRTUAL_ROWS)
                 ret
 
     ENDMODULE
+
+    OPT pop     ; restore original configuration of sjasmplus syntax
+
+    DISPLAY "screen.s size (/w displayedge): ", /D, $-screen.s.code_size, " > just tile8x6: ", /D, $-tile8x6.DisplayMarginsArr
 
 ;;----------------------------------------------------------------------------------------

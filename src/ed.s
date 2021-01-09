@@ -52,7 +52,7 @@ CMDBUFFER       equ     $bd
 ;;----------------------------------------------------------------------------------------------------------------------
 ;; Font
 
-        org     video.FONT_ADR
+        org     tile8x6.FONT_ADR
 
         include "../data/tilemap_font_8x6.i.s"
 ;         incbin  "../data/font.bin"
@@ -109,13 +109,14 @@ Initialise:
             ;; display edge init
                 ; read default /sys/env.cfg file
                 ld      hl,dspedge.defaultCfgFileName
-                ld      de,video.DisplayMarginsArr
+                ld      de,tile8x6.DisplayMarginsArr
                 ld      bc,ParsingBuffer
                 call    dspedge.ParseCfgFile    ; set array to -1 values even when error happens
                 ; just ignore esxdos errors if reading cfg file fails
 
             ;; video init (tilemode 80x32 HW, 80x42 SW)
-                call    video.InitVideo
+                nextreg $4A,$08                 ; TRANSPARENCY_FALLBACK_COL_NR_4A to green
+                call    tile8x6.InitVideo
                 ret
 
 ;;----------------------------------------------------------------------------------------------------------------------
@@ -132,56 +133,56 @@ Initialise:
 ;; The main loop
 
 Main:
-                call    video.ClearScreen
+                call    tile8x6.ClearScreen
 
-;; TEST video.CalcTileAddress
+;; TEST tile8x6.CalcTileAddress
 ;                 ld      de,$BEEF
 ;                 ld      a,$F0
 ;                 ld      bc,$0000    ; => $4000
-;                 call    video.CalcTileAddress
+;                 call    tile8x6.CalcTileAddress
 ;                 ld      bc,$0100    ; => $40A0
-;                 call    video.CalcTileAddress
+;                 call    tile8x6.CalcTileAddress
 ;                 ld      bc,$0001    ; => $4002
-;                 call    video.CalcTileAddress
+;                 call    tile8x6.CalcTileAddress
 ;                 ld      bc,$0a00    ; => $4640
-;                 call    video.CalcTileAddress
+;                 call    tile8x6.CalcTileAddress
 ;                 ld      bc,$000a    ; => $4014
-;                 call    video.CalcTileAddress
+;                 call    tile8x6.CalcTileAddress
 ;                 ld      bc,$4433    ; => $6ae6
-;                 call    video.CalcTileAddress
+;                 call    tile8x6.CalcTileAddress
 
-;; TEST video.CalcLineAddress
+;; TEST tile8x6.CalcLineAddress
 ;                 break
 ;                 ld      de,$BEEF
 ;                 ld      a,$F0
 ;                 ld      bc,$00F0    ; => $4000
-;                 call    video.CalcLineAddress
+;                 call    tile8x6.CalcLineAddress
 ;                 ld      b,$01       ; => $40A0
-;                 call    video.CalcLineAddress
+;                 call    tile8x6.CalcLineAddress
 ;                 ld      b,$0a       ; => $4640
-;                 call    video.CalcLineAddress
+;                 call    tile8x6.CalcLineAddress
 ;                 ld      b,$44       ; => $6a80
-;                 call    video.CalcLineAddress
+;                 call    tile8x6.CalcLineAddress
 
-;; TEST video.GetInvisibleScanlines_byMode
+;; TEST tile8x6.GetInvisibleScanlines_byMode
 ;                 xor     a
 ; .TestGetInvisibleScanlines:
 ;                 push    af
-;                 call    video.GetInvisibleScanlines_byMode
+;                 call    tile8x6.GetInvisibleScanlines_byMode
 ;                 break : nop : nop
 ;                 pop     af
 ;                 inc     a
-;                 cp      video.MODE_COUNT+1
+;                 cp      tile8x6.MODE_COUNT+1
 ;                 jr      nz,.TestGetInvisibleScanlines
 
 MainLoop:
                 ld      a,5
                 out     (254),a
-                call    video.CopperNeedsReinit
+                call    tile8x6.CopperNeedsReinit
                 jr      z,.videoConfigIsOk
-                call    video.SetCopperIsInitialized
-                ld      de,video.DisplayMarginsArr
-                call    video.GetModeData
+                call    tile8x6.SetCopperIsInitialized
+                ld      de,tile8x6.DisplayMarginsArr
+                call    tile8x6.GetModeData
         ;       HLDE = L/R/T/B user defined margins (sanitized to 0..31 even if not found in cfg file)
         ;       B = fully visible text rows (6px)
         ;       A = remaining visible scanlines after last full row (0..5)
@@ -197,7 +198,7 @@ MainLoop:
                 ld      bc,$2300
                 ld      de,$0624
                 xor     a
-                call    video.WriteSpace
+                call    tile8x6.WriteSpace
                 ld      hl,$4000+($24*160)+4
                 call    .debugFullTileSet
                 ld      hl,$4000+($24*160)+80
@@ -234,6 +235,7 @@ MainLoop:
 1:
                 ei
                 halt
+;                 .5 halt         ; extra slow debug loop
                 push    bc
 
                 ; FIXME extra delay
@@ -258,32 +260,32 @@ MainLoop:
                 ; force re-init any way
 ;                 and     (1<<3)-1 : jr nz,100F     ; every n-th frame only
                 ld      a,dspedge.MODE_COUNT
-                ld      (video.CopperNeedsReinit.CurrentMode),a
+                ld      (tile8x6.CopperNeedsReinit.CurrentMode),a
 ;                jr      100F
-                call    video.CopperNeedsReinit
+                call    tile8x6.CopperNeedsReinit
                 jr      z,100F  ; no reinit needed
-                call    video.SetCopperIsInitialized
-                ld      de,video.DisplayMarginsArr
-                call    video.GetModeData
+                call    tile8x6.SetCopperIsInitialized
+                ld      de,tile8x6.DisplayMarginsArr
+                call    tile8x6.GetModeData
         ;       HLDE = L/R/T/B user defined margins (sanitized to 0..31 even if not found in cfg file)
         ;       B = fully visible text rows (6px)
         ;       A = remaining visible scanlines after last full row (0..5)
                 ld      ix,.debugSDisMap
-                ld      (ix+video.SDisplayMap.skipScanlines),d    ; (first item).skipScanlines = margin at top
+                ld      (ix+tile8x6.SDisplayMap.skipScanlines),d    ; (first item).skipScanlines = margin at top
                 ld      a,b
                 sub     30
-                ld      (ix+video.SDisplayMap*1+video.SDisplayMap.rows),a
+                ld      (ix+tile8x6.SDisplayMap*1+tile8x6.SDisplayMap.rows),a
                 ; TODO do something interesting with the rest of the info
 
-                call    video.CopperReinit
+                call    tile8x6.CopperReinit
                 jr      100F
 .debugSDisMap:
                         //        { skipLines,  Rows,   tilemapY,   xOffset }
-;                 video.SDisplayMap {         2,    42,          0 }
+;                 tile8x6.SDisplayMap {         2,    42,          0 }
 ;                 db      -1
-                video.SDisplayMap {         1,     4,          0 }
-.map2:          video.SDisplayMap {         7,    12,          0 }
-.map3:          video.SDisplayMap {         4,    20,         23 }
+                tile8x6.SDisplayMap {         1,     4,          0 }
+.map2:          tile8x6.SDisplayMap {         7,    12,          0 }
+.map3:          tile8x6.SDisplayMap {         4,    20,         23 }
                 db      -1
 100:
                 pop     bc
@@ -302,8 +304,8 @@ MainLoop:
                 push    af
                 xor     a
 301:            push    af
-                ld      de,video.DisplayMarginsArr
-                call    video.GetModeData
+                ld      de,tile8x6.DisplayMarginsArr
+                call    tile8x6.GetModeData
                 ld      (DebugValue),a
                 call    DisplayDebugger
                 pop     af
